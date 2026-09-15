@@ -20,7 +20,7 @@ jobs:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_RELEASE_LTO: thin
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8
-      GPROXY_BUILD_VERSION: 3.0.16+quota.3
+      GPROXY_BUILD_VERSION: 3.0.16+quota.4
       GPROXY_BUILD_CHANNEL: development
       GPROXY_BUILD_HASH: ${{ github.sha }}
       GPROXY_INSTALLATION_KIND: container
@@ -59,7 +59,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Backend regression tests
-        run: cargo test --locked --release -p gproxy-channels -p gproxy-core -p gproxy-app --lib
+        run: cargo test --locked --release -p gproxy-channels -p gproxy-core -p gproxy-store -p gproxy-admin -p gproxy-app --lib
       - name: Compile production binary
         run: cargo build --locked --release --package gproxy-host-axum --bin gproxy
       - name: Assemble and verify image
