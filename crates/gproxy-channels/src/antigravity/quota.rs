@@ -189,17 +189,23 @@ fn summary_bucket(bucket: &Value, group: Option<&str>) -> Option<QuotaObservatio
                 .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
         })
         .filter(|value| value.is_finite() && (0.0..=1.0).contains(value));
+    // When the weekly cap is exhausted Google disables the 5h bucket and
+    // returns remainingFraction=1. That is not usable quota. Preserve a
+    // display marker without changing the stable window key or DTO schema.
+    let disabled = bucket.get("disabled").and_then(Value::as_bool) == Some(true);
     Some(QuotaObservation {
         unit: None,
         reset_behavior: QuotaResetBehavior::Periodic,
         scope: QuotaScope::ModelPrefixes(prefixes),
         sample: None,
         window_key: format!("{family}-{period}"),
-        label: None,
+        label: disabled.then(|| "antigravity_disabled".into()),
         period_start: None,
         period_end: text(bucket, "resetTime", "reset_time")
             .and_then(crate::shared::quota::iso_to_unix),
-        used_percent: fraction.and_then(crate::shared::quota::remaining_fraction_to_used_percent),
+        used_percent: fraction
+            .filter(|_| !disabled)
+            .and_then(crate::shared::quota::remaining_fraction_to_used_percent),
         upstream_used: None,
         upstream_limit: None,
     })
@@ -222,6 +228,23 @@ mod tests {
         assert_eq!(observed[0].used_percent, Some("20".parse().unwrap()));
         assert_eq!(observed[0].period_end, Some(1_785_585_600));
         assert_eq!(observed[0].period_start, None);
+    }
+
+    #[test]
+    fn disabled_five_hour_bucket_is_not_reported_as_available_quota() {
+        let body = br#"{"groups":[{"displayName":"Claude and GPT models","buckets":[
+          {"bucketId":"3p-weekly","window":"weekly","remainingFraction":0},
+          {"bucketId":"3p-5h","window":"5h","remainingFraction":1,"disabled":true}
+        ]}]}"#;
+        let observed = parse_probe(http::StatusCode::OK, body);
+        let weekly = observed
+            .iter()
+            .find(|o| o.window_key == "3p-weekly")
+            .unwrap();
+        assert_eq!(weekly.used_percent, Some(100.into()));
+        let five_hour = observed.iter().find(|o| o.window_key == "3p-5h").unwrap();
+        assert_eq!(five_hour.used_percent, None);
+        assert_eq!(five_hour.label.as_deref(), Some("antigravity_disabled"));
     }
 
     #[test]

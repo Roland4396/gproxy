@@ -21,7 +21,10 @@ const SCOPED: Array<[string, string]> = [
    an upstream-declared label wins for scoped keys, and everything else stays
    verbatim rather than guessing. */
 export function windowName(key: string, t: TFunction, label?: string | null): string {
-  if (KNOWN.has(key)) return t(`usage.windowNames.${key}`)
+  if (KNOWN.has(key)) {
+    const name = t(`usage.windowNames.${key}`)
+    return label === "antigravity_disabled" ? t("usage.windowNames.inactive", { window: name }) : name
+  }
   for (const [prefix, i18nKey] of SCOPED) {
     if (key.startsWith(prefix)) {
       const derived = key.slice(prefix.length).replace(/_/g, " ")
