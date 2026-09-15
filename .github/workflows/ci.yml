@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - fix/antigravity-quota-refresh
   pull_request:
 
 concurrency:

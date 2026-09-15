@@ -194,7 +194,11 @@
       "weekly_surface": "{{scope}} weekly limit",
       "additional_primary": "{{scope}} primary window",
       "additional_secondary": "{{scope}} secondary window",
-      "product": "{{scope}}"
+      "product": "{{scope}}",
+      "gemini-5h": "Gemini · 5-hour quota",
+      "gemini-weekly": "Gemini · Weekly quota",
+      "3p-5h": "Claude / GPT · 5-hour quota",
+      "3p-weekly": "Claude / GPT · Weekly quota"
     },
     "record": {
       "time": "Time",

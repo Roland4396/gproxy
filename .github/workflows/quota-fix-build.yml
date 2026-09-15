@@ -1,0 +1,87 @@
+name: Quota fix · Linux image
+
+on:
+  push:
+    branches: [fix/antigravity-quota-refresh]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quota-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8
+      GPROXY_BUILD_VERSION: 3.0.16+quota.1
+      GPROXY_BUILD_CHANNEL: development
+      GPROXY_BUILD_HASH: ${{ github.sha }}
+      GPROXY_INSTALLATION_KIND: container
+    steps:
+      - uses: actions/checkout@v7
+      - name: Native build dependencies (GitHub runner only)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clang cmake libclang-dev pkg-config
+          sudo fallocate -l 8G /swapfile-quota
+          sudo chmod 600 /swapfile-quota
+          sudo mkswap /swapfile-quota
+          sudo swapon /swapfile-quota
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: console/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          cache: pnpm
+          cache-dependency-path: console/pnpm-lock.yaml
+      - name: Console validation and embedded assets
+        working-directory: console
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm test
+          pnpm build
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: quota-fix-linux-release
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Backend regression tests
+        run: cargo test --locked --release -p gproxy-channels -p gproxy-core -p gproxy-app --lib
+      - name: Compile production binary
+        run: cargo build --locked --release --package gproxy-host-axum --bin gproxy
+      - name: Assemble and verify image
+        run: |
+          mkdir -p dist/data artifact
+          cp target/release/gproxy dist/gproxy
+          image="gproxy-local:quota-${GITHUB_SHA::12}"
+          docker build -f deploy/container/Dockerfile.release \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GPROXY_BUILD_VERSION}" \
+            -t "$image" .
+          docker run --rm "$image" --version
+          docker run --rm "$image" --help >/dev/null
+          docker save "$image" | gzip > artifact/gproxy-quota-image.tar.gz
+          docker image inspect "$image" --format '{{.Id}}' > artifact/image-id.txt
+          jq -n --arg commit "$GITHUB_SHA" --arg image "$image" --arg version "$GPROXY_BUILD_VERSION" \
+            '{commit:$commit,image:$image,version:$version}' > artifact/build-info.json
+          cd artifact
+          sha256sum gproxy-quota-image.tar.gz image-id.txt build-info.json > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gproxy-quota-linux-amd64
+          path: artifact/
+          retention-days: 14
+          if-no-files-found: error

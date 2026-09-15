@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next"
 
 const KNOWN = new Set([
+  "gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly",
   "five_hour", "seven_day",
   "primary", "secondary",
   "weekly_limit", "monthly_limit", "usage", "enterprise",

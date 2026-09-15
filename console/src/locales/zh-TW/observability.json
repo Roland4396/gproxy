@@ -194,7 +194,11 @@
       "weekly_surface": "{{scope}} 週限額",
       "additional_primary": "{{scope}} 主視窗",
       "additional_secondary": "{{scope}} 次視窗",
-      "product": "{{scope}}"
+      "product": "{{scope}}",
+      "gemini-5h": "Gemini · 5 小時額度",
+      "gemini-weekly": "Gemini · 週額度",
+      "3p-5h": "Claude / GPT · 5 小時額度",
+      "3p-weekly": "Claude / GPT · 週額度"
     },
     "record": {
       "time": "時間",
