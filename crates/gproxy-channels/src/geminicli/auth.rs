@@ -1,6 +1,14 @@
 use gproxy_channel_api::{BoxFuture, ChannelError, SimpleHttp};
 use serde_json::Value;
 
+static OAUTH: crate::shared::google_oauth::GoogleOAuth = crate::shared::google_oauth::GoogleOAuth {
+    profile: &super::profile::PROFILE,
+    profile_required: false,
+    user_agent: None,
+    default_client_id: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
+    default_client_secret: "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",
+};
+
 pub(super) fn access_token(secret: &Value) -> Result<&str, ChannelError> {
     field(secret, "access_token").ok_or_else(|| ChannelError::Secret("access_token missing".into()))
 }
@@ -18,16 +26,7 @@ pub(super) fn refresh<'a>(
     settings: &'a Value,
     http: &'a dyn SimpleHttp,
 ) -> BoxFuture<'a, Result<Value, ChannelError>> {
-    crate::shared::google_oauth::refresh(
-        secret,
-        settings,
-        http,
-        &super::profile::PROFILE,
-        false,
-        None,
-        "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
-        "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",
-    )
+    crate::shared::google_oauth::refresh(secret, settings, http, &OAUTH)
 }
 
 fn field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {

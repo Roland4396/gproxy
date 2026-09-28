@@ -6,6 +6,14 @@ use serde_json::Value;
 
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
+pub(crate) struct GoogleOAuth {
+    pub profile: &'static ClientProfile,
+    pub profile_required: bool,
+    pub user_agent: Option<&'static str>,
+    pub default_client_id: &'static str,
+    pub default_client_secret: &'static str,
+}
+
 pub(crate) fn refresh_due(secret: &Value) -> Option<i64> {
     field(secret, "refresh_token")?;
     if field(secret, "access_token").is_none() {
@@ -22,21 +30,9 @@ pub(crate) fn refresh<'a>(
     secret: &'a Value,
     settings: &'a Value,
     http: &'a dyn SimpleHttp,
-    profile: &'static ClientProfile,
-    profile_required: bool,
-    user_agent: Option<&'static str>,
-    default_client_id: &'static str,
-    default_client_secret: &'static str,
+    config: &'static GoogleOAuth,
 ) -> BoxFuture<'a, Result<Value, ChannelError>> {
-    let request = match build_refresh(
-        secret,
-        settings,
-        profile,
-        profile_required,
-        user_agent,
-        default_client_id,
-        default_client_secret,
-    ) {
+    let request = match build_refresh(secret, settings, config) {
         Ok(request) => request,
         Err(error) => return Box::pin(async move { Err(error) }),
     };
@@ -58,19 +54,15 @@ pub(crate) fn refresh<'a>(
 fn build_refresh(
     secret: &Value,
     settings: &Value,
-    profile: &'static ClientProfile,
-    profile_required: bool,
-    user_agent: Option<&str>,
-    default_client_id: &'static str,
-    default_client_secret: &'static str,
+    config: &GoogleOAuth,
 ) -> Result<http::Request<Bytes>, ChannelError> {
     let refresh = required(secret, "refresh_token")?;
     let client_id = field(settings, "oauth_client_id")
         .or_else(|| field(secret, "client_id"))
-        .unwrap_or(default_client_id);
+        .unwrap_or(config.default_client_id);
     let client_secret = field(settings, "oauth_client_secret")
         .or_else(|| field(secret, "client_secret"))
-        .unwrap_or(default_client_secret);
+        .unwrap_or(config.default_client_secret);
     let url = field(settings, "oauth_token_url")
         .or_else(|| field(secret, "oauth_token_url"))
         .unwrap_or(TOKEN_URL);
@@ -88,7 +80,7 @@ fn build_refresh(
         .header(http::header::ACCEPT, "application/json")
         .body(Bytes::from(body))
         .map_err(|error| ChannelError::Refresh(error.to_string()))?;
-    if let Some(user_agent) = user_agent {
+    if let Some(user_agent) = config.user_agent {
         request.headers_mut().insert(
             http::header::USER_AGENT,
             user_agent
@@ -96,8 +88,8 @@ fn build_refresh(
                 .map_err(|_| ChannelError::Refresh("invalid Google OAuth user agent".into()))?,
         );
     }
-    request.extensions_mut().insert(profile.clone());
-    if profile_required {
+    request.extensions_mut().insert(config.profile.clone());
+    if config.profile_required {
         request.extensions_mut().insert(RequiredClientProfile);
     }
     Ok(request)
