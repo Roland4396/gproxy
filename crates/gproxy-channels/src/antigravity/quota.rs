@@ -3,7 +3,7 @@
 
 use bytes::Bytes;
 use gproxy_channel_api::{ChannelError, QuotaObservation, QuotaResetBehavior, QuotaScope};
-use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 
 pub(super) fn probe_request(
@@ -57,7 +57,7 @@ fn request(
     {
         body["project"] = Value::String(project.to_owned());
     }
-    http::Request::post(uri)
+    let mut request = http::Request::post(uri)
         .header(
             AUTHORIZATION,
             http::HeaderValue::from_str(&format!("Bearer {access}"))
@@ -65,10 +65,10 @@ fn request(
         )
         .header(CONTENT_TYPE, "application/json")
         .header(ACCEPT, "application/json")
-        .header(USER_AGENT, super::prepare::USER_AGENT_VALUE)
         .body(Bytes::from(body.to_string()))
-        .map(Some)
-        .map_err(|error| ChannelError::Prepare(error.to_string()))
+        .map_err(|error| ChannelError::Prepare(error.to_string()))?;
+    super::profile::apply(&mut request, settings)?;
+    Ok(Some(request))
 }
 
 pub(super) fn parse_probe(status: http::StatusCode, body: &[u8]) -> Vec<QuotaObservation> {

@@ -1,4 +1,4 @@
-name: Local fixes · Linux image
+name: Custom Linux image
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: quota-fix-${{ github.ref }}
+  group: custom-linux-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_RELEASE_LTO: thin
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8
-      GPROXY_BUILD_VERSION: 3.0.16+quota.4
+      GPROXY_BUILD_VERSION: 3.0.22+antigravity.1
       GPROXY_BUILD_CHANNEL: development
       GPROXY_BUILD_HASH: ${{ github.sha }}
       GPROXY_INSTALLATION_KIND: container
@@ -54,7 +54,7 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          key: quota-fix-linux-release
+          key: custom-linux-release
           cache-on-failure: true
       - name: Check formatting
         run: cargo fmt --all --check
@@ -66,7 +66,7 @@ jobs:
         run: |
           mkdir -p dist/data artifact
           cp target/release/gproxy dist/gproxy
-          image="gproxy-local:quota-${GITHUB_SHA::12}"
+          image="gproxy-local:antigravity-${GITHUB_SHA::12}"
           docker build -f deploy/container/Dockerfile.release \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
@@ -74,15 +74,15 @@ jobs:
             -t "$image" .
           docker run --rm "$image" --version
           docker run --rm "$image" --help >/dev/null
-          docker save "$image" | gzip > artifact/gproxy-quota-image.tar.gz
+          docker save "$image" | gzip > artifact/gproxy-antigravity-image.tar.gz
           docker image inspect "$image" --format '{{.Id}}' > artifact/image-id.txt
           jq -n --arg commit "$GITHUB_SHA" --arg image "$image" --arg version "$GPROXY_BUILD_VERSION" \
             '{commit:$commit,image:$image,version:$version}' > artifact/build-info.json
           cd artifact
-          sha256sum gproxy-quota-image.tar.gz image-id.txt build-info.json > SHA256SUMS
+          sha256sum gproxy-antigravity-image.tar.gz image-id.txt build-info.json > SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
-          name: gproxy-quota-linux-amd64
+          name: gproxy-antigravity-linux-amd64
           path: artifact/
           retention-days: 14
           if-no-files-found: error

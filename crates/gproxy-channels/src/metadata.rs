@@ -82,6 +82,15 @@ pub(crate) const VERTEX: &[ChannelField] = &[
     gateway_fallback(),
     field("claude_fallback_models", StringList, false, true),
 ];
+pub(crate) const ANTIGRAVITY: &[ChannelField] = &[
+    field("base_url", Url, false, false),
+    field("user_agent", Text, false, true),
+    field("oauth_client_id", Text, false, true),
+    field("oauth_client_secret", Secret, false, true),
+    field("oauth_token_url", Url, false, true),
+    gateway_fallback(),
+    field("claude_fallback_models", StringList, false, true),
+];
 pub(crate) const KIRO: &[ChannelField] = &[
     field("base_url", Url, false, false),
     field("region", Text, false, false),

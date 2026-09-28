@@ -1,5 +1,7 @@
 use bytes::Bytes;
-use gproxy_channel_api::{AuthCodeStart, ChannelError, ClientProfile, SimpleHttp};
+use gproxy_channel_api::{
+    AuthCodeStart, ChannelError, ClientProfile, RequiredClientProfile, SimpleHttp,
+};
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde_json::{Value, json};
 
@@ -13,8 +15,13 @@ pub(crate) struct GoogleLogin {
     pub code_assist_base: &'static str,
     pub fallback_tier: &'static str,
     pub user_agent: &'static str,
+    pub token_user_agent: Option<&'static str>,
+    pub onboard_user_agent_suffix: Option<&'static str>,
+    pub goog_api_client: Option<&'static str>,
     pub metadata: fn(Option<&str>) -> Value,
+    pub onboard_metadata: Option<fn(&str) -> Value>,
     pub profile: &'static ClientProfile,
+    pub profile_required: bool,
 }
 
 pub(crate) fn start(
@@ -54,6 +61,7 @@ pub(crate) async fn exchange(
     verifier: &str,
     redirect_uri: &str,
     extra: Option<&Value>,
+    provider_settings: &Value,
 ) -> Result<Value, ChannelError> {
     let mut request = super::login::form_request(
         http::Method::POST,
@@ -67,13 +75,14 @@ pub(crate) async fn exchange(
             ("code_verifier", verifier),
         ],
     )?;
-    request.extensions_mut().insert(config.profile.clone());
+    apply_identity(&mut request, config, provider_settings, IdentityKind::Token)?;
     let token: Value = super::login::send_json(http, request, "Google token").await?;
     let access_token = super::login::field(&token, "access_token")
         .ok_or_else(|| ChannelError::Login("Google token missing access_token".into()))?
         .to_owned();
     let hint = extra.and_then(project_hint);
-    let (project_id, tier) = resolve_project(http, config, &access_token, hint).await?;
+    let (project_id, tier) =
+        resolve_project(http, config, provider_settings, &access_token, hint).await?;
     let mut secret = json!({
         "access_token":access_token,
         "expires_at_ms":super::login::now_ms().saturating_add(
@@ -91,7 +100,7 @@ pub(crate) async fn exchange(
     if let Some(tier) = tier {
         secret["rate_limit_tier"] = Value::String(tier);
     }
-    if let Some(email) = user_email(http, config.profile, &access_token).await {
+    if let Some(email) = user_email(http, config, provider_settings, &access_token).await {
         secret["user_email"] = Value::String(email);
     }
     Ok(secret)
@@ -100,6 +109,7 @@ pub(crate) async fn exchange(
 async fn resolve_project(
     http: &dyn SimpleHttp,
     config: &GoogleLogin,
+    provider_settings: &Value,
     access_token: &str,
     hint: Option<&str>,
 ) -> Result<(String, Option<String>), ChannelError> {
@@ -111,6 +121,7 @@ async fn resolve_project(
     let loaded = code_assist_post(
         http,
         config,
+        provider_settings,
         access_token,
         "/v1internal:loadCodeAssist",
         &load,
@@ -121,13 +132,20 @@ async fn resolve_project(
         return Ok((project, tier));
     }
     let tier_id = default_tier(&loaded).unwrap_or(config.fallback_tier);
-    let mut onboard = json!({ "tierId":tier_id, "metadata":metadata });
+    let mut onboard = match config.onboard_metadata {
+        Some(builder) => json!({
+            "tier_id":tier_id,
+            "metadata":builder(configured_user_agent(config, provider_settings)),
+        }),
+        None => json!({ "tierId":tier_id, "metadata":metadata }),
+    };
     if let Some(project) = hint {
         onboard["cloudaicompanionProject"] = Value::String(project.into());
     }
     let mut onboarded = code_assist_post(
         http,
         config,
+        provider_settings,
         access_token,
         "/v1internal:onboardUser",
         &onboard,
@@ -136,7 +154,7 @@ async fn resolve_project(
     if onboarded.get("done").and_then(Value::as_bool) == Some(false)
         && let Some(name) = super::login::field(&onboarded, "name").map(str::to_owned)
     {
-        onboarded = poll_operation(http, config, access_token, &name).await?;
+        onboarded = poll_operation(http, config, provider_settings, access_token, &name).await?;
     }
     let project = onboarded
         .get("response")
@@ -159,6 +177,7 @@ async fn resolve_project(
 async fn poll_operation(
     http: &dyn SimpleHttp,
     config: &GoogleLogin,
+    provider_settings: &Value,
     access_token: &str,
     name: &str,
 ) -> Result<Value, ChannelError> {
@@ -171,10 +190,14 @@ async fn poll_operation(
         ))
         .header(AUTHORIZATION, format!("Bearer {access_token}"))
         .header(ACCEPT, "application/json")
-        .header(USER_AGENT, config.user_agent)
         .body(Bytes::new())
         .map_err(|error| ChannelError::Login(error.to_string()))?;
-        request.extensions_mut().insert(config.profile.clone());
+        apply_identity(
+            &mut request,
+            config,
+            provider_settings,
+            IdentityKind::Onboard,
+        )?;
         let operation: Value =
             super::login::send_json(http, request, "Code Assist operation").await?;
         if operation.get("done").and_then(Value::as_bool) != Some(false) {
@@ -189,6 +212,7 @@ async fn poll_operation(
 async fn code_assist_post(
     http: &dyn SimpleHttp,
     config: &GoogleLogin,
+    provider_settings: &Value,
     access_token: &str,
     path: &str,
     body: &Value,
@@ -204,20 +228,19 @@ async fn code_assist_post(
             .parse()
             .map_err(|_| ChannelError::Login("invalid Google access token".into()))?,
     );
-    request.headers_mut().insert(
-        USER_AGENT,
-        config
-            .user_agent
-            .parse()
-            .map_err(|_| ChannelError::Login("invalid Google user agent".into()))?,
-    );
-    request.extensions_mut().insert(config.profile.clone());
+    apply_identity(
+        &mut request,
+        config,
+        provider_settings,
+        IdentityKind::CodeAssist,
+    )?;
     super::login::send_json(http, request, "Code Assist").await
 }
 
 async fn user_email(
     http: &dyn SimpleHttp,
-    profile: &'static ClientProfile,
+    config: &GoogleLogin,
+    provider_settings: &Value,
     access_token: &str,
 ) -> Option<String> {
     let mut request = http::Request::get("https://www.googleapis.com/oauth2/v1/userinfo?alt=json")
@@ -226,10 +249,74 @@ async fn user_email(
         .header(CONTENT_TYPE, "application/json")
         .body(Bytes::new())
         .ok()?;
-    request.extensions_mut().insert(profile.clone());
+    apply_identity(
+        &mut request,
+        config,
+        provider_settings,
+        IdentityKind::CodeAssist,
+    )
+    .ok()?;
     let response = http.send(request).await.ok()?;
     let value: Value = serde_json::from_slice(response.body()).ok()?;
     super::login::field(&value, "email").map(str::to_owned)
+}
+
+#[derive(Clone, Copy)]
+enum IdentityKind {
+    Token,
+    CodeAssist,
+    Onboard,
+}
+
+fn apply_identity(
+    request: &mut http::Request<Bytes>,
+    config: &GoogleLogin,
+    provider_settings: &Value,
+    kind: IdentityKind,
+) -> Result<(), ChannelError> {
+    let user_agent = match kind {
+        IdentityKind::Token => config.token_user_agent.map(str::to_owned),
+        IdentityKind::CodeAssist => Some(configured_user_agent(config, provider_settings).into()),
+        IdentityKind::Onboard => {
+            let base = configured_user_agent(config, provider_settings);
+            Some(match config.onboard_user_agent_suffix {
+                Some(suffix) if !base.contains(suffix) => format!("{base} {suffix}"),
+                _ => base.to_owned(),
+            })
+        }
+    };
+    if let Some(user_agent) = user_agent {
+        request.headers_mut().insert(
+            USER_AGENT,
+            user_agent
+                .parse()
+                .map_err(|_| ChannelError::Login("invalid Google user agent".into()))?,
+        );
+    }
+    if matches!(kind, IdentityKind::Onboard)
+        && let Some(value) = config.goog_api_client
+    {
+        request.headers_mut().insert(
+            http::HeaderName::from_static("x-goog-api-client"),
+            value
+                .parse()
+                .map_err(|_| ChannelError::Login("invalid Google API client identity".into()))?,
+        );
+    }
+    request.extensions_mut().insert(config.profile.clone());
+    if config.profile_required {
+        request.extensions_mut().insert(RequiredClientProfile);
+    }
+    Ok(())
+}
+
+fn configured_user_agent<'a>(config: &'a GoogleLogin, settings: &'a Value) -> &'a str {
+    settings
+        .get("user_agent")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(config.user_agent)
 }
 
 fn project_hint(value: &Value) -> Option<&str> {

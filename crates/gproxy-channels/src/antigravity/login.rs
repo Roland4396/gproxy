@@ -15,9 +15,14 @@ const CONFIG: crate::shared::google_login::GoogleLogin = crate::shared::google_l
     scope: "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs https://www.googleapis.com/auth/aicode",
     code_assist_base: "https://daily-cloudcode-pa.googleapis.com",
     fallback_tier: "LEGACY",
-    user_agent: "antigravity/cli/1.0.6 linux/amd64",
+    user_agent: super::profile::DEFAULT_USER_AGENT,
+    token_user_agent: Some(super::profile::OAUTH_USER_AGENT),
+    onboard_user_agent_suffix: Some(super::profile::ONBOARD_USER_AGENT_SUFFIX),
+    goog_api_client: Some(super::profile::GOOG_API_CLIENT),
     metadata,
+    onboard_metadata: Some(onboard_metadata),
     profile: &super::profile::PROFILE,
+    profile_required: true,
 };
 
 impl ChannelLogin for AntigravityChannel {
@@ -49,6 +54,7 @@ impl ChannelLogin for AntigravityChannel {
                 ctx.verifier,
                 ctx.redirect_uri,
                 ctx.extra,
+                ctx.provider_settings,
             )
             .await
             .map(CredentialAcquisition::oauth)
@@ -57,9 +63,13 @@ impl ChannelLogin for AntigravityChannel {
 }
 
 fn metadata(_: Option<&str>) -> Value {
+    json!({"ideType":"ANTIGRAVITY"})
+}
+
+fn onboard_metadata(user_agent: &str) -> Value {
     json!({
-        "ideType":"ANTIGRAVITY",
-        "platform":"PLATFORM_UNSPECIFIED",
-        "pluginType":"GEMINI",
+        "ide_type":"ANTIGRAVITY",
+        "ide_version":super::identity::client_version(user_agent),
+        "ide_name":"antigravity",
     })
 }

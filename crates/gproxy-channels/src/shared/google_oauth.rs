@@ -1,5 +1,7 @@
 use bytes::Bytes;
-use gproxy_channel_api::{BoxFuture, ChannelError, ClientProfile, SimpleHttp};
+use gproxy_channel_api::{
+    BoxFuture, ChannelError, ClientProfile, RequiredClientProfile, SimpleHttp,
+};
 use serde_json::Value;
 
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
@@ -21,6 +23,8 @@ pub(crate) fn refresh<'a>(
     settings: &'a Value,
     http: &'a dyn SimpleHttp,
     profile: &'static ClientProfile,
+    profile_required: bool,
+    user_agent: Option<&'static str>,
     default_client_id: &'static str,
     default_client_secret: &'static str,
 ) -> BoxFuture<'a, Result<Value, ChannelError>> {
@@ -28,6 +32,8 @@ pub(crate) fn refresh<'a>(
         secret,
         settings,
         profile,
+        profile_required,
+        user_agent,
         default_client_id,
         default_client_secret,
     ) {
@@ -53,6 +59,8 @@ fn build_refresh(
     secret: &Value,
     settings: &Value,
     profile: &'static ClientProfile,
+    profile_required: bool,
+    user_agent: Option<&str>,
     default_client_id: &'static str,
     default_client_secret: &'static str,
 ) -> Result<http::Request<Bytes>, ChannelError> {
@@ -80,7 +88,18 @@ fn build_refresh(
         .header(http::header::ACCEPT, "application/json")
         .body(Bytes::from(body))
         .map_err(|error| ChannelError::Refresh(error.to_string()))?;
+    if let Some(user_agent) = user_agent {
+        request.headers_mut().insert(
+            http::header::USER_AGENT,
+            user_agent
+                .parse()
+                .map_err(|_| ChannelError::Refresh("invalid Google OAuth user agent".into()))?,
+        );
+    }
     request.extensions_mut().insert(profile.clone());
+    if profile_required {
+        request.extensions_mut().insert(RequiredClientProfile);
+    }
     Ok(request)
 }
 

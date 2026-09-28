@@ -1,6 +1,7 @@
 mod routes;
 
 mod auth;
+mod identity;
 mod login;
 mod models;
 mod prepare;
@@ -23,7 +24,7 @@ pub struct AntigravityChannel;
 static DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "antigravity",
     display_name: "Antigravity",
-    provider_fields: crate::metadata::VERTEX,
+    provider_fields: crate::metadata::ANTIGRAVITY,
     credential_fields: crate::metadata::GOOGLE_OAUTH,
     endpoint_overrides: true,
     traffic_policy: crate::policy::ANTIGRAVITY,

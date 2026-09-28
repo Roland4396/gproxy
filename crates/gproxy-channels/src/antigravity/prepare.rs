@@ -1,15 +1,15 @@
 use bytes::Bytes;
 use gproxy_channel_api::{ChannelError, PrepareCtx, PreparedRequest};
 use gproxy_protocol::{Operation, StreamFraming};
-use http::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue, USER_AGENT};
+use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use serde_json::Value;
 
 const BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
-pub(super) const USER_AGENT_VALUE: &str = "antigravity/cli/1.0.6 linux/amd64";
 
 pub(super) fn request(ctx: PrepareCtx<'_>) -> Result<PreparedRequest, ChannelError> {
     let access = super::auth::access_token(ctx.secret)?;
     let project = super::auth::project_id(ctx.secret)?;
+    let identity = super::identity::RuntimeIdentity::new(ctx.secret, ctx.session_id)?;
     let (endpoint, path, query, body, framing) = match ctx.key.operation() {
         Operation::ListModels => (
             "gemini_list_models",
@@ -49,7 +49,10 @@ pub(super) fn request(ctx: PrepareCtx<'_>) -> Result<PreparedRequest, ChannelErr
                     "/v1internal:generateContent"
                 },
                 (stream && !buffered).then_some("alt=sse"),
-                crate::shared::code_assist::wrap(&body, ctx.upstream_model, project)?,
+                identity.wrap_generation(
+                    &crate::shared::code_assist::wrap(&body, ctx.upstream_model, project)?,
+                    ctx.upstream_model,
+                )?,
                 stream.then_some(if buffered {
                     StreamFraming::JsonArray
                 } else {
@@ -73,13 +76,16 @@ pub(super) fn request(ctx: PrepareCtx<'_>) -> Result<PreparedRequest, ChannelErr
             .map_err(|error| ChannelError::Secret(error.to_string()))?,
     );
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+    // The native Hub runtime sends only its own request identity. Do not leak
+    // the downstream client's Accept/User-Agent fingerprint upstream.
+    headers.remove(ACCEPT);
     let mut request = http::Request::builder()
         .method(http::Method::POST)
         .uri(crate::shared::http::strip_userinfo(uri)?)
         .body(body)
         .map_err(|error| ChannelError::Prepare(error.to_string()))?;
     *request.headers_mut() = headers;
+    super::profile::apply_runtime(&mut request, ctx.provider_settings, &identity)?;
     Ok(PreparedRequest {
         request,
         framing,

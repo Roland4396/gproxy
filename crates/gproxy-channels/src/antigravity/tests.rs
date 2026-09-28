@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use gproxy_channel_api::{Channel, PrepareCtx, StreamCtx, StreamEnd};
+use gproxy_channel_api::{Channel, PrepareCtx, RequiredClientProfile, StreamCtx, StreamEnd};
 use gproxy_protocol::{
     ContentGenerationKind as Kind, Operation, OperationKey, StreamFraming, WireFamily,
 };
@@ -65,12 +65,40 @@ fn resolves_daily_default_and_exact_override_urls() {
     assert_eq!(stream.request.headers()["authorization"], "Bearer access");
     assert_eq!(
         stream.request.headers()["user-agent"],
-        "antigravity/cli/1.0.6 linux/amd64"
+        "antigravity/hub/2.17.0 darwin/arm64"
     );
-    assert_eq!(stream.request.headers()["accept"], "text/event-stream");
+    assert!(stream.request.headers().get("accept").is_none());
+    assert_eq!(stream.request.headers()["x-client-name"], "antigravity");
+    assert_eq!(stream.request.headers()["x-client-version"], "2.17.0");
+    assert!(stream.request.headers().get("x-machine-id").is_some());
+    assert!(stream.request.headers().get("x-vscode-sessionid").is_some());
+    assert!(
+        stream
+            .request
+            .extensions()
+            .get::<RequiredClientProfile>()
+            .is_some()
+    );
     assert_eq!(
         stream.profile.unwrap().preserve_tls13_cipher_list,
         Some(true)
+    );
+    let envelope: Value = serde_json::from_slice(stream.request.body()).unwrap();
+    assert!(envelope.get("user_prompt_id").is_none());
+    assert_eq!(envelope["userAgent"], "antigravity");
+    assert!(
+        envelope["requestId"]
+            .as_str()
+            .unwrap()
+            .starts_with("agent/")
+    );
+    assert!(
+        envelope["request"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()
+            .unwrap()
+            .is_negative()
     );
 }
 

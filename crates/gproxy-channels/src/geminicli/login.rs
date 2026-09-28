@@ -18,8 +18,13 @@ const CONFIG: crate::shared::google_login::GoogleLogin = crate::shared::google_l
     code_assist_base: "https://cloudcode-pa.googleapis.com",
     fallback_tier: "legacy-tier",
     user_agent: "GeminiCLI-tui/0.55.1 (linux; x64; terminal) google-api-nodejs-client/10.9.0",
+    token_user_agent: None,
+    onboard_user_agent_suffix: None,
+    goog_api_client: None,
     metadata,
+    onboard_metadata: None,
     profile: &super::profile::PROFILE,
+    profile_required: false,
 };
 
 impl ChannelLogin for GeminiCliChannel {
@@ -58,6 +63,7 @@ impl ChannelLogin for GeminiCliChannel {
                 ctx.verifier,
                 ctx.redirect_uri,
                 ctx.extra,
+                ctx.provider_settings,
             )
             .await
             .map(CredentialAcquisition::oauth)
