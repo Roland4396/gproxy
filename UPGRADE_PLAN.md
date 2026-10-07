@@ -72,3 +72,9 @@ Keep a complete tested rollback. Do not treat backups alone as history parity.
   retention regression: JSON equality treated `Some(None)` as the default `None` patch.
   Fixed patch-presence detection from that log evidence; no release artifact was deployed.
 - Added `PATCH_COMPARISON.md` covering every fork-only commit and pending acceptance gates.
+- Rollback image rehearsal passed on a private `--network none` canary using the original
+  snapshot: management login 200, all six providers and 18 credentials present. The source
+  snapshot hash was unchanged. Canary was stopped/removed; production remained running.
+- Subsequent CI logs identified a test-only unsuffixed millisecond literal and the frontend's
+  mandatory static i18n-key scanner. Added the explicit i64 type and static translation calls;
+  neither failure reached release/deployment. Full CI must still pass on the corrected source.

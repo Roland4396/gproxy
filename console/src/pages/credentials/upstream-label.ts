@@ -1,12 +1,11 @@
 import type { TFunction } from "i18next"
 
 export function quotaWindowName(key: string, t: TFunction, label?: string | null): string {
-  const antigravity: Record<string, string> = {
-    "gemini-5h": "limits.geminiFiveHourQuota", "gemini-weekly": "limits.geminiWeeklyQuota",
-    "3p-5h": "limits.thirdPartyFiveHourQuota", "3p-weekly": "limits.thirdPartyWeeklyQuota",
-  }
-  if (antigravity[key]) {
-    const name = t(antigravity[key])
+  const name = key === "gemini-5h" ? t("limits.geminiFiveHourQuota")
+    : key === "gemini-weekly" ? t("limits.geminiWeeklyQuota")
+      : key === "3p-5h" ? t("limits.thirdPartyFiveHourQuota")
+        : key === "3p-weekly" ? t("limits.thirdPartyWeeklyQuota") : null
+  if (name != null) {
     return label === "antigravity_disabled" ? t("limits.inactiveQuota", { window: name }) : name
   }
   if (key === "five_hour") return t("limits.fiveHourQuota")

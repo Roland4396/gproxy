@@ -51,6 +51,9 @@ Paths in the table are relative to `crates/gproxy-*` or `console/src` as named.
 - [x] Console initial lint/tests/build passed on GitHub; seven projection unit tests passed.
 - [x] First native CI compiled all selected packages; regression correctly stopped release
       on explicit-null policy loss (`37674738072`). Fixed from that log evidence.
+- [x] Retained v3 image booted on the original snapshot in a network-isolated canary:
+      login 200 and provider/credential count parity; original snapshot unchanged;
+      canary stopped and removed. Production remained on its original process/image.
 - [ ] All final-source backend/channel/protocol/console regressions passed on GitHub.
 - [ ] Immutable final artifact hashes/image revision verified.
 - [ ] Real-snapshot native import and history projection: complete counts/content/cost audit.

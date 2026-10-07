@@ -407,7 +407,7 @@ mod tests {
         let e = dto_entry(
             &json!({"id":"3p-5h","sourceId":"subscription","kind":"window",
             "label":"antigravity_disabled","modelScope":"all","allowance":{
-                "usedPercent":"0","periodStartMs":null,"periodEndMs":1791411621000}}),
+                "usedPercent":"0","periodStartMs":null,"periodEndMs":1791411621000_i64}}),
         );
         assert_eq!(e["value"]["used_percent"], "0");
         assert_eq!(e["value"]["period_end"], 1791411621_i64);
