@@ -111,6 +111,16 @@ def audit(source_path, target_path):
             equal(new["provider_id"], v3_id("providers", old["provider_id"]), f"price_rule/{old['id']}/provider")
             equal(new["currency"], "USD", f"price_rule/{old['id']}/currency")
             checked["price_rules"] += 1
+            for index, tier in enumerate(json.loads(old["tiers_json"] or "[]")):
+                new_tier = row_by_id(target, "price_tiers", v3_id("price_rules", old["id"]) + f"-tier-{index}")
+                equal(new_tier["service_tier"], tier.get("service_tier"), f"price_tier/{old['id']}/{index}/service_tier")
+                equal(new_tier["min_prompt_tokens"], tier.get("min_prompt_tokens", 0), f"price_tier/{old['id']}/{index}/threshold")
+                equal(new_tier["priority"], index, f"price_tier/{old['id']}/{index}/priority")
+                for field in ["multiplier", "input", "output", "cache_read", "cache_creation_5m", "cache_creation_30m", "cache_creation_1h", "image_output"]:
+                    column = field if field == "multiplier" else field + "_per_million"
+                    expected = tier.get(field) if field in tier else tier.get(field + "_price")
+                    equal(new_tier[column], fixed(expected), f"price_tier/{old['id']}/{index}/{field}")
+                checked["price_tiers"] += 1
         for old in source.execute("SELECT * FROM price_rates"):
             new = row_by_id(target, "price_rates", v3_id("price_rates", old["id"]))
             for field in ("metric", "priority"):

@@ -867,7 +867,13 @@ fn price_tiers(rule_id: &str, row: &document::PriceRule, report: &mut Report) ->
         return Vec::new();
     };
     let money = |entry: &Value, key: &str| -> Option<String> {
-        let value = entry.get(key)?;
+        // Native v3 databases used input_price/output_price/etc.; some
+        // export documents use the shorter input/output names. Both spell
+        // the same per-million override. An explicit short-name null still
+        // means inherit, and an explicit zero remains a free override.
+        let value = entry
+            .get(key)
+            .or_else(|| entry.get(format!("{key}_price")))?;
         match value {
             Value::String(text) => Some(text.clone()),
             Value::Number(number) => Some(number.to_string()),
@@ -1279,6 +1285,33 @@ mod tests {
         assert_eq!(tiers[0].multiplier.as_deref(), Some("0.5"));
         assert_eq!(tiers[1].min_prompt_tokens, 200000);
         assert_eq!(tiers[1].input_per_million.as_deref(), Some("6"));
+    }
+
+    #[test]
+    fn database_tier_price_names_preserve_overrides_zero_and_explicit_null() {
+        let out = translated(json!({
+            "price_rules": [{"id": 1, "provider_id": 2, "model_pattern": "synthetic-*",
+                "tiers": [
+                    {"min_prompt_tokens": 200000, "input_price": "6", "output_price": "0",
+                     "cache_read_price": "0.6", "cache_creation_30m_price": "7.5"},
+                    {"service_tier": "batch", "multiplier": "0.5", "input": "2", "input_price": "99"},
+                    {"service_tier": "flex", "input": null, "input_price": "99"}
+                ]}]
+        }));
+        let tiers = &out.export.data.price_tiers;
+        assert_eq!(tiers.len(), 3);
+        assert_eq!(tiers[0].min_prompt_tokens, 200000);
+        assert_eq!(tiers[0].input_per_million.as_deref(), Some("6"));
+        assert_eq!(tiers[0].output_per_million.as_deref(), Some("0"));
+        assert_eq!(tiers[0].cache_read_per_million.as_deref(), Some("0.6"));
+        assert_eq!(
+            tiers[0].cache_creation_30m_per_million.as_deref(),
+            Some("7.5")
+        );
+        assert_eq!(tiers[1].multiplier.as_deref(), Some("0.5"));
+        assert_eq!(tiers[1].input_per_million.as_deref(), Some("2"));
+        assert!(tiers[2].input_per_million.is_none());
+        assert!(out.report.warnings.is_empty());
     }
 
     #[test]

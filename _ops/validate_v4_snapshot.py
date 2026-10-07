@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 
 from audit_v4_snapshot import audit
@@ -143,8 +144,6 @@ print(json.dumps({'health_http':200,'login_http':200,'providers':len(providers),
                   "source_sha256": before, "source_unchanged": hashlib.sha256(args.snapshot.read_bytes()).hexdigest() == before,
                   "archive_tables": len(parity["archives"]), "native_checks": parity["native_checks"],
                   "management": management, "paid_inference_requests": 0, "gpu_requests": 0}
-        private_json(args.work / "result.json", result)
-        print(json.dumps(result))
     finally:
         if created:
             logs = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
@@ -153,6 +152,19 @@ print(json.dumps({'health_http':200,'login_http':200,'providers':len(providers),
             log.chmod(0o600)
             run(["docker", "stop", "--time", "15", name])
             run(["docker", "rm", name])
+    # A process can leave committed WAL pages at exit. Do not copy just its
+    # main file or ignore that WAL; take a consistent post-boot backup first.
+    postboot = args.work / "postboot-gproxy.db"
+    with sqlite3.connect(f"file:{target}?mode=ro", uri=True) as live, sqlite3.connect(postboot) as snapshot:
+        live.backup(snapshot)
+    postboot.chmod(0o600)
+    post_parity = audit(copied, postboot)
+    private_json(args.work / "postboot-parity-audit.json", post_parity)
+    result["postboot_parity"] = True
+    if not result["source_unchanged"]:
+        raise AssertionError("original source snapshot changed")
+    private_json(args.work / "result.json", result)
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

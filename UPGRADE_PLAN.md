@@ -84,3 +84,15 @@ Keep a complete tested rollback. Do not treat backups alone as history parity.
 - Added read-only real-snapshot parity auditor, network-isolated native import/canary driver,
   and explicit functional/visual/WebKit QA inventory. Ten Python tests pass; full native schema
   execution awaits the immutable GitHub artifact.
+- CI `37678970970` passed the complete native/frontend suite and produced a verified image.
+  Its isolated import retained all accounts, routes, base prices, captures, usage and original
+  archives; installed-image JSON/SSE streaming also passed (first event before later emission).
+  Expanded field-level audit caught a missing **tier price override** migration (`*_price`
+  versus short export keys). This candidate is not production-eligible. Ported both spellings
+  and added a zero/null/precedence regression; repeat full CI and real snapshot audit.
+- Image verification binds OCI manifest → CI-recorded config → all layer hashes and embedded
+  binary SHA. This host exposes the manifest digest as inspect.Id while the runner recorded
+  the config digest; a string-only ID comparison is insufficient across those Docker versions.
+- Post-boot parity uses SQLite's backup API, including committed WAL pages, not a main-file
+  copy. WebKit's first driver launch found sudo's Node 12 rather than the installed Node 20;
+  pin the driver binary explicitly and rerun before UI acceptance.

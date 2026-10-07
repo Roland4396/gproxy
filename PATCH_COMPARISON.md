@@ -26,6 +26,12 @@ Paths in the table are relative to `crates/gproxy-*` or `console/src` as named.
   quota-observation retention follow the old policy, and no new independent payload budget
   silently deletes retained history. The null-only patch regression caught a JSON-equality
   bug in the first CI run; presence is now checked before deciding a patch is empty.
+- Real-snapshot validation additionally found native v3 tier blobs use `input_price`,
+  `output_price`, `cache_read_price` and `cache_creation_30m_price`, whereas upstream's
+  translator only read short export keys. The first isolated import lost those overrides
+  despite preserving all 31 rules and 109 base rates. Deployment was rejected. The importer
+  now accepts both spellings with explicit short-key precedence, retaining zero and null;
+  a synthetic regression and per-field real audit cover all 32 tier rows.
 - Native import preserves provider invocation names, enabled flags, credentials/ownership,
   key digests/password hashes, routes/aliases, prices and usage history. Its reports must be
   audited against the real snapshot: seeded defaults may be superseded by native channel
