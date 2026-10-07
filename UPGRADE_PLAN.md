@@ -1,5 +1,10 @@
 # Gproxy v4 upgrade — 2026-10-08
 
+## Final status
+**Complete — production v4.1.1, 2026-10-08 05:56 CST.**
+[Deployment results and rollback](DEPLOYMENT_REPORT_20261008.md) · [Patch comparison](PATCH_COMPARISON.md).
+The progress section below is chronological; its earlier pending gates describe superseded candidates.
+
 ## Contract
 Upgrade the production Gproxy deployment, preserving every local behavioral patch,
 account, route priority, price, history record and relevant configuration.
@@ -96,3 +101,19 @@ Keep a complete tested rollback. Do not treat backups alone as history parity.
 - Post-boot parity uses SQLite's backup API, including committed WAL pages, not a main-file
   copy. WebKit's first driver launch found sudo's Node 12 rather than the installed Node 20;
   pin the driver binary explicitly and rerun before UI acceptance.
+
+- Final GitHub run `37688152673` passed at source `9d13c7e369e0`, including tier-price
+  overrides and every retained patch. Image/archive/binary hashes verified.
+- Final real-snapshot, post-boot and post-production-start audits passed: 50 lossless
+  archive tables, native account/route/price/history/config parity, 20 decrypted
+  credential/API-key payload comparisons performed only in memory.
+- Installed immutable-image synthetic HTTP/provider mounts/SSE/early disconnect and
+  desktop+iPhone WebKit (35 screenshots, 12 surfaces) passed without external inference.
+- Final activity gate passed after the keeper's pending verification completed and
+  upstream connections released. Only Gproxy switched; management-ready outage upper
+  bound 9.1 seconds, with no active request interrupted. Fresh stopped-source snapshot
+  and complete original v3 data/image retained. Production native/legacy management,
+  private DNS and the actual Stream GproxyClient's cached reads passed.
+- Stream, stable Nginx entry, Tavern, account-pool, Graph/orchestrator processes unchanged
+  across cutover. Runtime flags/pool JSON hashes unchanged; Claude effort remains medium.
+  All isolated canaries removed. Final source/report pushed; no paid validation or GPU wakeup.

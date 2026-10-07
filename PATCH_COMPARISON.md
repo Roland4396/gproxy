@@ -2,7 +2,9 @@
 
 Baseline: `54ee589a91f6005278a064db6d714acabb600067`.
 Pinned upstream: `14ec5d71d7aca94255dee7b6704504234d1e3f37` (v4.1.1 lineage).
-This is an implementation/evidence ledger; deployment gates below are not yet complete.
+All acceptance gates passed. Production was switched on 2026-10-08 at 05:55–05:56 CST.
+See [the final deployment report](DEPLOYMENT_REPORT_20261008.md) for immutable image,
+real-snapshot parity, activity checks, limitations and executable rollback evidence.
 
 ## Every fork-only commit
 
@@ -63,12 +65,25 @@ Paths in the table are relative to `crates/gproxy-*` or `console/src` as named.
 - [x] Retained v3 image booted on the original snapshot in a network-isolated canary:
       login 200 and provider/credential count parity; original snapshot unchanged;
       canary stopped and removed. Production remained on its original process/image.
-- [ ] All final-source backend/channel/protocol/console regressions passed on GitHub.
-- [ ] Immutable final artifact hashes/image revision verified.
-- [ ] Real-snapshot native import and history projection: complete counts/content/cost audit.
-- [ ] Local synthetic HTTP/SSE and management compatibility; WebKit console verification.
-- [ ] Production activity gates, final snapshot and migration, safe image/data switch.
-- [ ] Production health/parity, rollback rehearsal and final report.
+- [x] Final source `9d13c7e369e0`: 2,913 backend tests across 213 suites, 20 console test
+      files and 10 Python tests passed on [GitHub run 37688152673](https://github.com/Roland4396/gproxy/actions/runs/37688152673).
+- [x] Immutable artifact manifest/config/layers and embedded binary SHA verified;
+      deployed image `gproxy-local:upgrade-v4-9d13c7e369e0`.
+- [x] Fresh stopped-production snapshot imported and audited; all 50 original tables
+      preserved losslessly; native policies, 18 credentials, 612 usage records, 31 price
+      rules / 109 rates / 32 tier overrides and routing preserved. All 18 credential and
+      two API-key payloads match after decryption in memory, before/after startup.
+- [x] Installed final-image synthetic root/provider-mounted JSON and SSE passed;
+      first event at 44 ms, later event at 1.2 s, early disconnect released upstream.
+      Desktop + iPhone WebKit passed 35 screenshots / 12 surfaces, no page errors.
+      Two quota-panel probes were intercepted as synthetic fixtures, never upstream calls.
+- [x] Production stop gate: Stream HTTP/WS/request-owned work zero, keeper outside sweep,
+      no pending verification, Gproxy outgoing model connections zero. Only Gproxy
+      stopped/recreated; separate v4 data mount. Management-ready outage upper bound 9.1 s.
+- [x] Production health, native and legacy login/list/cached-quota reads, post-start
+      field/content/secret parity, private DNS and existing Stream client reads passed.
+      Old image/full data/compose/environment retained; v3 rollback image rehearsal passed.
+      Other service processes and Stream/account-pool configuration hashes unchanged.
 
 No paid inference, live cloned-account refresh/probe or GPU wakeup is permitted for validation.
 

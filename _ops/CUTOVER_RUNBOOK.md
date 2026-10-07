@@ -73,3 +73,6 @@ candidate that lost tier-price overrides is not eligible.
 The retained v3 image has already been booted on an isolated snapshot with
 successful login/count parity. The final deployment report records actual
 cutover paths, hashes and outcomes, not merely this planned procedure.
+
+Executed 2026-10-08 05:55–05:56 CST with all gates passed; see
+[the final deployment report](../DEPLOYMENT_REPORT_20261008.md).
