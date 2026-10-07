@@ -54,6 +54,135 @@ async fn audit_rows(host: &Host) -> Vec<audit_event::Model> {
         .unwrap()
 }
 
+#[tokio::test]
+async fn v3_private_clients_keep_login_ids_lists_and_scoped_disclosure() {
+    use gproxy_store::entity::limits::credential_quota_cycle;
+    use sea_orm::Set;
+
+    let host = instance().await;
+    let handle = host.handle();
+    support::provider(&handle, "v3-providers-4", &["claude"]).await;
+    support::credential(
+        &handle,
+        "v3-credentials-9",
+        "v3-providers-4",
+        None,
+        None,
+        None,
+    )
+    .await;
+    handle
+        .store()
+        .credential_quota_cycles()
+        .create_many(vec![credential_quota_cycle::ActiveModel {
+            id: Set("observation".into()),
+            credential_id: Set("v3-credentials-9".into()),
+            scope: Set(json!("all")),
+            snapshot: Set(
+                json!({"id":"3p-5h","source_id":"subscription","kind":"window",
+            "used_percent":"0","period_start_ms":null,"period_end_ms":1791411621000_i64,
+            "label":"antigravity_disabled"}),
+            ),
+            observed_at_ms: Set(1791390000000_i64),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+    host.publish().await;
+    let data = host.data();
+    host.operations(&data)
+        .users()
+        .set_password("root", "synthetic root password")
+        .await
+        .unwrap();
+    drop(data);
+    host.publish().await;
+
+    let login = host
+        .send(post(
+            "/admin/api/login",
+            json!({"username":"root","password":"synthetic root password"}),
+        ))
+        .await;
+    assert_eq!(login.status, StatusCode::OK, "{}", login.text());
+    let cookie = login
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|h| h.to_str().unwrap().split(';').next().unwrap())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(cookie.contains("gproxy_session="));
+    assert!(cookie.contains("gproxy_v3_client=1"));
+
+    let listed = host
+        .send(with(get("/admin/api/credentials"), "cookie", &cookie))
+        .await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text());
+    assert_eq!(listed.json()[0]["id"], 9);
+    assert_eq!(listed.json()[0]["provider_id"], 4);
+    let native = host
+        .send(keyed(get("/admin/api/credentials"), "k-root"))
+        .await;
+    assert!(native.json()["items"].is_array());
+    assert_eq!(native.json()["items"][0]["id"], "v3-credentials-9");
+
+    let unauthorized = host.send(get("/admin/api/credentials/9/quota")).await;
+    assert_eq!(unauthorized.status, StatusCode::UNAUTHORIZED);
+    let ordinary = host
+        .send(keyed(get("/admin/api/credentials/9/quota"), "k-alice"))
+        .await;
+    assert_eq!(ordinary.status, StatusCode::FORBIDDEN);
+    let cached = host
+        .send(with(
+            get("/admin/api/credentials/9/quota"),
+            "cookie",
+            &cookie,
+        ))
+        .await;
+    assert_eq!(cached.status, StatusCode::OK, "{}", cached.text());
+    assert_eq!(cached.json()["entries"][0]["value"]["used_percent"], "0");
+    assert_eq!(
+        cached.json()["entries"][0]["value"]["period_end"],
+        1791411621_i64
+    );
+    assert!(cached.json()["entries"][0]["value"]["period_start"].is_null());
+    assert_eq!(
+        cached.json()["sources"][0]["observed_at_ms"],
+        1791390000000_i64
+    );
+
+    let foreign = host
+        .send(with(
+            with(
+                post("/admin/api/credentials/9/reveal", json!({})),
+                "cookie",
+                &cookie,
+            ),
+            "origin",
+            "https://attacker.example",
+        ))
+        .await;
+    assert_eq!(foreign.status, StatusCode::FORBIDDEN);
+    let secret = host
+        .send(keyed(
+            post("/admin/api/credentials/9/reveal", json!({})),
+            "k-root",
+        ))
+        .await;
+    assert_eq!(secret.status, StatusCode::OK, "{}", secret.text());
+    assert_eq!(secret.json()["secret"]["api_key"], "k-v3-credentials-9");
+    let legacy_pool = host
+        .send(with(
+            get("/admin/providers/4/credentials"),
+            "cookie",
+            &cookie,
+        ))
+        .await;
+    assert_eq!(legacy_pool.status, StatusCode::OK);
+    assert_eq!(legacy_pool.json()[0]["id"], 9);
+}
+
 // -------------------------------------------------------------- /admin/api --
 
 #[tokio::test]

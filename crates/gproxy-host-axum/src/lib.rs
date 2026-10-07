@@ -98,6 +98,7 @@ pub mod admin;
 pub mod console;
 pub mod error;
 pub mod ingress;
+mod legacy;
 mod memo;
 pub mod mount;
 pub mod oauth;
@@ -270,7 +271,7 @@ pub fn router<C>(state: HostState<C>) -> Router
 where
     C: BatchConnectionTrait + Send + Sync + 'static,
 {
-    Router::new()
+    let native = Router::new()
         .route(
             "/robots.txt",
             get(|| async { "User-agent: *\nDisallow: /\n" }),
@@ -301,7 +302,12 @@ where
                 response
             },
         ))
-        .with_state(state)
+        .with_state(state);
+    // Rewrite before the native router matches. Its auth/scope/CSRF/audit
+    // guards remain the sole authority for every compatibility request.
+    Router::new()
+        .fallback_service(native)
+        .layer(axum::middleware::from_fn(legacy::compat))
 }
 
 /// Liveness, and the revision this process is serving.

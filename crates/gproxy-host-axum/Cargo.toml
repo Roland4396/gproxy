@@ -37,6 +37,7 @@ serde_json = { workspace = true }
 serde_urlencoded = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+time = { workspace = true, features = ["formatting"] }
 # `SystemTime::now()` inside a Worker isolate, where `std::time` has no clock.
 web-time = { workspace = true }
 

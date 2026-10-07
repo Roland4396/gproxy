@@ -105,6 +105,7 @@ where
     .route("/credentials/{id}/status", post(set_status::<C>))
     .route("/credentials/{id}/refresh", post(refresh::<C>))
     .route("/credentials/{id}/quota", get(quota_read::<C>))
+    .route("/credentials/{id}/v3-quota", get(quota_v3_cached::<C>))
     .route(
         "/credentials/{id}/quota-observations",
         get(quota_observations::<C>),
@@ -422,6 +423,34 @@ where
 {
     crate::send(async move { scoped!(state, scope, "credentials", credentials.quota_read(&id)) })
         .await
+}
+
+/// The private v3 scheduler reads upstream observations, not inferred local
+/// cycle clocks. It uses the same credential section and owner-aware family.
+async fn quota_v3_cached<C>(
+    State(state): State<HostState<C>>,
+    Extension(scope): Extension<AdminScope>,
+    Path(id): Path<String>,
+) -> Response
+where
+    C: BatchConnectionTrait + Send + Sync + 'static,
+{
+    crate::send(async move {
+        gate!("credentials", scope);
+        let data = state.app().data();
+        let scoped = ScopedManage::new(state.app().gproxy(), &data, &scope);
+        let query = QuotaObservationQuery {
+            since_ms: Some(0),
+            page: Some(1),
+            page_size: Some(500),
+            ..Default::default()
+        };
+        match scoped.credentials().quota_observations(&id, query).await {
+            Ok(page) => crate::error::ok_json(&crate::legacy::cached_snapshot(&page.items)),
+            Err(error) => ErrorResponse(error).into_response(),
+        }
+    })
+    .await
 }
 
 async fn quota_observations<C>(

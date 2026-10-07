@@ -52,3 +52,16 @@ Keep a complete tested rollback. Do not treat backups alone as history parity.
 - Found dependent v3 admin API clients in Stream's quota keeper and account-pool capacity
   probes. Login shape, numeric IDs, pagination and quota response changes require a
   compatibility port before final deployment. Do not silently break these clients.
+- Added a narrow v3 wire adapter around the native router: legacy login aliases,
+  imported numeric IDs, credential/provider lists, cached upstream observations,
+  diagnostic quota probes, secret envelopes and capacity-probe usage windows.
+  Native authentication, tenant scope, CSRF and audit remain mandatory. Native v4
+  clients keep their page/ID shapes; inference bodies and streams bypass the adapter.
+  Synthetic router/security regressions are awaiting GitHub CI execution.
+- Offline history projections now validate integrity and foreign keys before commit,
+  so an invalid projection rolls back instead of leaving a partial destination.
+- Production remains unchanged. A user-reported availability error was confirmed
+  in Stream logs on the separate `anti5` route, not on the newly imported Claude
+  subscription route; user cancelled the account/VNC investigation and resumed upgrade.
+- Latest user preference: Stream Claude effort is **medium** again. In-place CAS
+  update preserved inode and every other setting; live blue container readback passed.

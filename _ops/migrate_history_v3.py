@@ -386,11 +386,11 @@ def migrate(source_path: Path, target_path: Path) -> dict:
         report.update(quota_history(source, target, tables))
         target.execute(f"CREATE TABLE {ident(marker)} (source_sha256 TEXT PRIMARY KEY, report_json TEXT NOT NULL)")
         target.execute(f"INSERT INTO {ident(marker)} VALUES (?,?)", (digest, json_text(report)))
-        target.commit()
         if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ValueError("v4 history integrity check failed")
         if target.execute("PRAGMA foreign_key_check").fetchall():
             raise ValueError("v4 history foreign-key check failed")
+        target.commit()
         return report
     except BaseException:
         target.rollback()
