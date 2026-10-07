@@ -34,7 +34,7 @@ const windows=[['3p-5h',null,'antigravity_disabled'],['3p-weekly','100',null],['
 const fixture={observedAtMs:now,entries:windows.map(([id,usedPercent,label])=>({id,sourceId:id,kind:'window',label,subject:'account',modelScope:{model_prefixes:id.startsWith('3p')?['claude','gpt']:['gemini']},allowance:{used:null,limit:null,remaining:null,usedPercent,unlimited:false,unit:'percent',periodStartMs:null,periodEndMs:now+3600000,resetBehavior:'observed'},balance:null,breakdown:null}))};
 const browser=await webkit.launch({headless:true});
 try{
- for(const mode of ['desktop','iphone']){
+ for(const mode of (process.argv[5]==='all'?['desktop','iphone']:[process.argv[5]])){
   const context=await browser.newContext(mode==='desktop'?{viewport:{width:1440,height:1000},locale:'en-US'}:{...devices['iPhone 13'],locale:'en-US'});
   const page=await context.newPage();
   page.setDefaultTimeout(20000);
@@ -49,29 +49,51 @@ try{
    }
    return route.continue();
   });
-  async function screenshot(name){
-   await page.waitForTimeout(180);
+  async function screenshot(name,expected){
+   await page.waitForTimeout(500);
+   if(expected)await expected.waitFor({state:'visible'});
    const dimensions=await page.evaluate(()=>({width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth}));
    if(dimensions.documentWidth>dimensions.width+2)throw Error('page-level horizontal clipping at '+name);
    const file=path.join(work,mode+'-'+name+'.png');
-   await page.screenshot({path:file,scale:'css'});result.screens.push({mode,name,file,dimensions});
+   const before={dialogs:await page.getByRole('dialog').count(),expectedBox:expected?await expected.boundingBox():null};
+   await page.screenshot({path:file,scale:'css'});
+   const after={dialogs:await page.getByRole('dialog').count(),expectedBox:expected?await expected.boundingBox():null};
+   if(expected){
+    await expected.waitFor({state:'visible'});
+    // WebKit's mobile element screenshot repeatedly scrolls a fixed dialog
+    // while waiting for stability. Capture its already verified viewport box.
+    await page.screenshot({path:path.join(work,mode+'-'+name+'-region.png'),clip:await expected.boundingBox(),scale:'css'});
+   }
+   result.screens.push({mode,name,file,dimensions,before,after});
+   fs.writeFileSync(path.join(work,'browser-progress.json'),JSON.stringify(result,null,2)+'\n',{mode:0o600});
   }
   async function fit(locator,name){
    const box=await locator.boundingBox();
    const v=page.viewportSize();
    if(!box||box.x<-.5||box.y<-.5||box.x+box.width>v.width+.5||box.y+box.height>v.height+.5)throw Error('primary control clipped: '+name);
   }
+  async function activate(locator){
+   if(mode!=='iphone')return locator.click();
+   const box=await locator.boundingBox();
+   if(!box)throw Error('touch target missing');
+   const viewport=page.viewportSize();
+   const x=box.x+box.width/2,y=box.y+box.height/2;
+   if(x<0||x>viewport.width||y<0||y>viewport.height)throw Error('touch target outside viewport');
+   await page.touchscreen.tap(x,y);
+  }
   async function nav(route){
    const href='/console'+route;
    const trigger=page.getByRole('button',{name:'Navigation',exact:true});
-   if(await trigger.isVisible()){await trigger.click();await page.getByRole('dialog').waitFor();}
+   if(await trigger.isVisible()){await activate(trigger);await page.getByRole('dialog').waitFor();await page.waitForTimeout(350);}
    const visible=page.locator('a[href="'+href+'"]:visible').first();
    if(!await visible.count()){
     const summary=page.locator('nav details:has(a[href="'+href+'"]):visible > summary').first();
     await summary.click();
    }
-   await page.locator('a[href="'+href+'"]:visible').first().click();
+   const link=page.locator('a[href="'+href+'"]:visible').first();
+   if(mode==='iphone')await link.tap();else await link.click();
    await page.waitForURL('**'+href);await page.waitForTimeout(250);
+   if(mode==='iphone')await page.locator('[data-slot="sheet-content"]').waitFor({state:'hidden'});
    result.surfaces.push({mode,route});
   }
   await page.goto(url,{waitUntil:'domcontentloaded'});
@@ -91,10 +113,17 @@ try{
   await nav('/providers');await screenshot('providers');
   const search=page.getByRole('textbox',{name:'Search providers',exact:true});
   if(await search.count()){
-   await search.fill('qa-does-not-exist');await page.waitForTimeout(250);await search.fill('');
+   await search.fill('qa-does-not-exist');await page.waitForTimeout(250);
+   if(await page.locator('a[href="/console/providers/v3-providers-4/credentials"]:visible').count())throw Error('provider search did not filter');
+   await search.fill('');
   }
   const target=page.locator('a[href="/console/providers/v3-providers-4/credentials"]:visible');
   await target.first().click();await page.waitForURL('**/v3-providers-4/credentials');
+  await page.getByRole('button',{name:'Upstream allowance',exact:true}).first().waitFor();
+  const credentialSearch=page.getByRole('textbox',{name:'Search',exact:true});
+  await credentialSearch.fill('qa-no-such-credential');await page.waitForTimeout(250);
+  if(await page.getByRole('button',{name:'Upstream allowance',exact:true}).count())throw Error('credential search did not filter');
+  await credentialSearch.fill('');
   await page.getByRole('button',{name:'Upstream allowance',exact:true}).first().waitFor();
   await screenshot('credentials');
   await page.getByRole('button',{name:'Upstream allowance',exact:true}).first().click();
@@ -104,19 +133,56 @@ try{
   const inactive=dialog.locator('[data-slot=card]').filter({hasText:'Claude / GPT · 5-hour quota (inactive)'}).last();
   if(await inactive.locator('time,[role=progressbar]').count())throw Error('inactive window incorrectly advertises progress/reset');
   if(!(await inactive.innerText()).includes('Check the weekly quota'))throw Error('inactive weekly guidance missing');
-  await screenshot('inactive-quota-fixture');
+  await fit(dialog,'quota dialog');
+  await screenshot('inactive-quota-fixture',dialog);
   const trend=dialog.getByRole('button',{name:/Gemini · 5-hour quota.*Show/}).first();
   if(await trend.count()){
-   await trend.click();await page.waitForTimeout(350);await trend.click();
+   if(mode==='iphone'){
+    const body=dialog.locator('[data-slot="dialog-body"]');
+    // Playwright mobile WebKit explicitly has no wheel API. Stage a scroll
+    // position, then sign off the control itself using a real touch tap.
+    // This does not claim that an iOS swipe gesture was tested.
+    await body.evaluate(el=>{el.scrollTop=280});await page.waitForTimeout(350);
+    await screenshot('quota-active-windows',dialog);
+   }
+   await activate(trend);
+   const hide=dialog.getByRole('button',{name:/Gemini · 5-hour quota.*Hide/}).first();
+   await hide.waitFor();
+   if(await hide.getAttribute('aria-expanded')!=='true')throw Error('trend did not expand');
+   await screenshot('quota-trend-expanded',dialog);
+   await activate(hide);await trend.waitFor();
+   if(await trend.getAttribute('aria-expanded')!=='false')throw Error('trend did not collapse');
   }
-  await dialog.getByRole('button',{name:'Close',exact:true}).last().click();
+  await activate(dialog.getByRole('button',{name:'Close',exact:true}).last());
   await page.getByRole('tab',{name:'Routing rules',exact:true}).click();
   await page.waitForURL('**/v3-providers-4/routing');await screenshot('routing');
   await page.getByRole('tab',{name:'Models',exact:true}).click();
   await page.waitForURL('**/v3-providers-4/models');await screenshot('models-pricing');
+  if(mode==='desktop'){
+   const modelSearch=page.getByRole('textbox',{name:'Search',exact:true});
+   await modelSearch.fill('gemini-2.5-pro');
+   const pricing=page.getByRole('button',{name:'Pricing: gemini-2.5-pro',exact:true});
+   await pricing.waitFor();await pricing.click();
+   const prices=page.getByRole('dialog');await prices.waitFor();
+   await prices.getByRole('tab',{name:'Rates',exact:true}).waitFor();
+   await prices.getByText('USD /',{exact:false}).first().waitFor();
+   await screenshot('pricing-rates',prices);
+   await prices.getByRole('tab',{name:'Context and service tiers',exact:true}).click();
+   await screenshot('pricing-tiers',prices);
+   await prices.getByRole('button',{name:'Close',exact:true}).last().click();
+   await modelSearch.fill('');
+  }
   for(const route of ['/model-routes','/observation/usage','/observation/upstream','/identity/audit','/settings']){
    await nav(route);await screenshot(route.split('/').filter(Boolean).join('-'));
   }
+  await activate(page.getByRole('tab',{name:'Maintenance',exact:true}));
+  for(const label of ['Request history retention (days)','Capture payload retention (days)',
+                      'Capture payload size limit (MiB)','SQLite database size limit (MiB)']){
+   if(await page.getByLabel(label,{exact:true}).inputValue()!=='')throw Error('unlimited policy changed in console');
+  }
+  await screenshot('settings-unlimited-retention');
+  await activate(page.getByRole('tab',{name:'Logs',exact:true}));await screenshot('settings-logs');
+  await activate(page.getByRole('tab',{name:'General',exact:true}));
   // Locale changes are normal menu input and local browser preferences only.
   const english=page.getByRole('button',{name:'English',exact:true});
   if(await english.count()){
@@ -135,6 +201,13 @@ try{
  fs.writeFileSync(path.join(work,'browser-result.json'),JSON.stringify(result,null,2)+'\n',{mode:0o600});
  console.log(JSON.stringify({passed:true,engine:result.engine,screens:result.screens.length,surfaces:result.surfaces.length,fixtureProbes:result.fixtureProbes,realQuotaProbes:0,pageErrors:0}));
 }catch(e){
+ const pages=browser.contexts().flatMap(c=>c.pages());
+ const current=pages[pages.length-1];
+ if(current){
+  result.failedUrl=current.url();
+  result.failedDialogs=await current.getByRole('dialog').count();
+  await current.screenshot({path:path.join(work,'failure-viewport.png'),scale:'css'}).catch(()=>{});
+ }
  fs.writeFileSync(path.join(work,'browser-failure.json'),JSON.stringify({error:String(e),result},null,2)+'\n',{mode:0o600});throw e;
 }finally{await browser.close();}
 '''
@@ -152,6 +225,7 @@ def main():
     p.add_argument("--work", type=Path, required=True)
     p.add_argument("--playwright", type=Path, default=Path("/home/ubuntu/silllytaven/migration/node_modules/playwright/index.mjs"))
     p.add_argument("--node", type=Path, default=Path("/home/ubuntu/.nvm/versions/node/v20.19.6/bin/node"))
+    p.add_argument("--mode", choices=["all", "desktop", "iphone"], default="all")
     args = p.parse_args()
     if os.geteuid() != 0 or args.work.exists():
         raise SystemExit("requires root and a fresh private QA directory")
@@ -193,7 +267,7 @@ def main():
             time.sleep(0.25)
         browser_env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": "/home/ubuntu/.cache/ms-playwright"}
         browser = subprocess.run(["nsenter", "--target", pid, "--net", str(args.node.resolve()), "--input-type=module", "-",
-                                  str(args.playwright.resolve()), str(args.env_file.resolve()), str(args.work.resolve())],
+                                  str(args.playwright.resolve()), str(args.env_file.resolve()), str(args.work.resolve()), args.mode],
                                  input=JS, text=True, capture_output=True, env=browser_env)
         log = args.work / "browser.log"
         log.write_text(browser.stdout + browser.stderr)

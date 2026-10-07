@@ -56,6 +56,61 @@ def row_by_id(db, table, row_id, key="id"):
     return row
 
 
+def audit_model_metadata(source, target, checked):
+    strings = ["display_name", "description", "instructions", "default_reasoning_level",
+               "default_service_tier", "shell_type", "default_verbosity",
+               "default_reasoning_summary", "apply_patch_tool_type", "web_search_tool_type", "truncation_mode"]
+    numbers = ["context_window", "max_output_tokens", "max_context_window", "truncation_limit",
+               "auto_compact_token_limit", "effective_context_window_percent"]
+    flags = {k: k for k in ["thinking_supported", "thinking_adaptive_supported", "thinking_enabled_supported",
+                           "support_verbosity", "batch_supported", "citations_supported", "code_execution_supported",
+                           "context_management_supported", "structured_outputs_supported", "pdf_input_supported"]}
+    flags.update(reasoning_summary_supported="supports_reasoning_summary_parameter",
+                 image_detail_original_supported="supports_image_detail_original", search_supported="supports_search_tool")
+    known = {"input_modalities_known": "input_modalities", "output_modalities_known": "output_modalities",
+             "parameters_known": "supported_parameters", "reasoning_levels_known": "reasoning_levels",
+             "service_tiers_known": "service_tiers", "generation_methods_known": "generation_methods",
+             "supported_actions_known": "supported_actions"}
+    for old in source.execute("SELECT * FROM provider_models"):
+        new = row_by_id(target, "provider_models", v3_id("provider_models", old["id"]))
+        for field, expected in [("provider_id", v3_id("providers", old["provider_id"])),
+                                ("upstream_name", old["model_id"]), ("enabled", old["enabled"])]:
+            equal(new[field], expected, f"provider_model/{old['id']}/{field}")
+        actual = json.loads(new["metadata"])
+        expected = {}
+        for field in strings + numbers:
+            if old[field] is not None and old[field] != "":
+                expected[field] = old[field]
+        for column, key in flags.items():
+            if old[column] is not None:
+                expected[key] = bool(old[column])
+        for column, key in known.items():
+            if old[column]:
+                expected[key] = []
+        selector = (old["provider_id"], old["model_id"])
+        for table, convert in [
+            ("provider_model_modalities", lambda r: (r["direction"] + "_modalities", r["modality"])),
+            ("provider_model_parameters", lambda r: ("supported_parameters", r["parameter"])),
+            ("provider_model_reasoning_levels", lambda r: ("reasoning_levels", {"effort": r["effort"], "description": r["description"] or ""})),
+            ("provider_model_service_tiers", lambda r: ("service_tiers", {"id": r["tier_id"], "name": r["name"] or "", "description": r["description"] or ""})),
+            ("provider_model_methods", lambda r: ("generation_methods" if r["kind"] == "generation" else "supported_actions", r["method"])),
+        ]:
+            for row in source.execute(f"SELECT * FROM {ident(table)} WHERE provider_id=? AND model_id=? ORDER BY sort_order,id", selector):
+                key, value = convert(row)
+                expected.setdefault(key, []).append(value)
+                checked[table] += 1
+        for key, value in expected.items():
+            equal(actual.get(key), value, f"provider_model/{old['id']}/metadata/{key}")
+        variants = json.loads(old["variants_json"]) if old["variants_json"] else None
+        names = variants if isinstance(variants, list) else variants.get("variants") if isinstance(variants, dict) else []
+        for variant in names or []:
+            if variant not in actual.get("variants", []):
+                raise AssertionError(f"missing original model variant: {old['id']}")
+        if names and isinstance(variants, dict) and "expose_base" in variants:
+            equal(actual.get("expose_base"), variants["expose_base"], f"provider_model/{old['id']}/expose_base")
+        checked["provider_models"] += 1
+
+
 def audit(source_path, target_path):
     source, target = closed(source_path), closed(target_path)
     try:
@@ -213,6 +268,7 @@ def audit(source_path, target_path):
             if not any((v.get("name") if isinstance(v, dict) else v) == old["alias"] for v in variants):
                 raise AssertionError(f"missing provider alias: {old['id']}")
             checked["aliases"] += 1
+        audit_model_metadata(source, target, checked)
         for table, native in [("wire_logs", "upstream_records"), ("request_logs", "downstream_records")]:
             for old in source.execute(f"SELECT * FROM {ident(table)}"):
                 # Upstream ids are stable; downstream ids may be linked to usage.

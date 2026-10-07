@@ -40,9 +40,10 @@ def main():
         created = True
         pid = run(["docker", "inspect", "--format", "{{.State.Pid}}", name])
         script = r'''
-import json,threading,time,urllib.request,urllib.error
+import json,socket,threading,time,urllib.request,urllib.error
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 second_sent=threading.Event()
+cancelled=threading.Event()
 observed=[]
 class Mock(BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
@@ -52,7 +53,8 @@ class Mock(BaseHTTPRequestHandler):
   assert self.headers['Authorization']=='Bearer synthetic-upstream-key'
   assert body['model']=='mock-model'
   assert self.path=='/v1/chat/completions'
-  observed.append({'stream':bool(body.get('stream')),'path':self.path})
+  abort=body.get('messages',[{}])[0].get('content')=='synthetic early disconnect'
+  observed.append({'stream':bool(body.get('stream')),'path':self.path,'abort':abort})
   if not body.get('stream'):
    result={'id':'synthetic-json','object':'chat.completion','created':1791400000,'model':'mock-model',
     'choices':[{'index':0,'message':{'role':'assistant','content':'SYNTHETIC_OK'},'finish_reason':'stop'}],
@@ -63,6 +65,13 @@ class Mock(BaseHTTPRequestHandler):
    raw={'id':'synthetic-sse','object':'chat.completion.chunk','created':1791400000,'model':'mock-model','choices':[{'index':0,'delta':delta,'finish_reason':finish}]}
    self.wfile.write(('data: '+json.dumps(raw)+'\n\n').encode());self.wfile.flush()
   chunk({'role':'assistant','content':'FIRST'})
+  if abort:
+   self.connection.settimeout(5)
+   try:
+    if self.connection.recv(1)==b'':cancelled.set()
+   except socket.timeout:pass
+   self.close_connection=True
+   return
   time.sleep(1.2)
   second_sent.set();chunk({'content':'SECOND'});chunk({},'stop')
   self.wfile.write(b'data: [DONE]\n\n');self.wfile.flush();self.close_connection=True
@@ -87,8 +96,11 @@ assert credential['hasSecret'] is True
 body={'model':'synthetic/mock-model','messages':[{'role':'user','content':'synthetic smoke'}]}
 data=request('/v1/chat/completions',body)
 assert data['choices'][0]['message']['content']=='SYNTHETIC_OK'
+scoped={**body,'model':'mock-model'}
+data=request('/synthetic/v1/chat/completions',scoped)
+assert data['choices'][0]['message']['content']=='SYNTHETIC_OK'
 start=time.monotonic()
-req=urllib.request.Request(base+'/v1/chat/completions',data=json.dumps({**body,'stream':True}).encode(),
+req=urllib.request.Request(base+'/synthetic/v1/chat/completions',data=json.dumps({**scoped,'stream':True}).encode(),
  headers={'Content-Type':'application/json','Authorization':'Bearer synthetic-gateway-key'})
 with opener.open(req,timeout=10) as response:
  assert response.status==200 and 'text/event-stream' in response.headers['Content-Type']
@@ -103,10 +115,18 @@ with opener.open(req,timeout=10) as response:
    if line=='data: [DONE]':break
  elapsed=time.monotonic()-start
 assert any('FIRST' in l for l in lines) and any('SECOND' in l for l in lines)
-assert len(observed)==2 and observed[0]['stream'] is False and observed[1]['stream'] is True
+assert len(observed)==3 and observed[0]['stream'] is False and observed[2]['stream'] is True
+req=urllib.request.Request(base+'/synthetic/v1/chat/completions',data=json.dumps({**scoped,'stream':True,
+ 'messages':[{'role':'user','content':'synthetic early disconnect'}]}).encode(),
+ headers={'Content-Type':'application/json','Authorization':'Bearer synthetic-gateway-key'})
+with opener.open(req,timeout=10) as response:
+ assert response.readline().startswith(b'data:')
+assert cancelled.wait(5),'upstream connection was not released after downstream disconnected'
+assert len(observed)==4 and observed[-1]['abort'] is True
 server.shutdown()
 print(json.dumps({'json_http':200,'sse_http':200,'first_event_before_upstream_second':True,
- 'first_event_ms':round(first*1000),'stream_elapsed_ms':round(elapsed*1000),'upstream_requests':2,
+ 'first_event_ms':round(first*1000),'stream_elapsed_ms':round(elapsed*1000),'upstream_requests':4,
+ 'provider_scoped_json_and_sse':True,'upstream_released_after_downstream_disconnect':True,
  'synthetic_only':True,'external_network':False,'paid_inference_requests':0}))
 '''
         result = json.loads(run(["nsenter", "--target", pid, "--net", "python3", "-"], input=script))

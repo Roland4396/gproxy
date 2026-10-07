@@ -41,3 +41,8 @@ the console initiate a real probe. Browser and canary are network-isolated. A
 fixture rendering check is not evidence of fresh live upstream availability.
 Interactive `js_repl` is not available in this executor; use the installed Node
 Playwright driver with persistent handles per test run instead of claiming it was used.
+Mobile WebKit supports real touch taps but not the Playwright wheel API. The
+driver stages an internal quota-dialog scroll position before tapping its trend
+control; it does not claim to have tested an iOS swipe gesture. Desktop and
+mobile screenshots are captured only after the appropriate overlay state has
+settled, with before/after DOM/bounding-box checks for dialog evidence.
