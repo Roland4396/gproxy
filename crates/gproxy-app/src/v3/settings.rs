@@ -43,6 +43,20 @@ pub fn patch(settings: &BTreeMap<String, Value>, report: &mut Report) -> Option<
     };
     let count = |key: &str| get(key).and_then(Value::as_u64);
     let list = |key: &str| get(key).filter(|value| value.is_array()).cloned();
+    // A stored null is an explicit unlimited policy, not an absent setting.
+    // In particular, do not replace v3's unlimited history with v4's new
+    // seven-day/two-GiB payload defaults during an upgrade.
+    let nullable_count = |key: &str| {
+        settings.get(key).and_then(|value| {
+            if value.is_null() {
+                Some(None)
+            } else {
+                value.as_u64().map(Some)
+            }
+        })
+    };
+    let retention = nullable_count("retention_days")
+        .and_then(|value| value.map(u32::try_from).transpose().ok());
 
     let update_channel = text("update_channel").and_then(|channel| {
         match channel.to_ascii_lowercase().as_str() {
@@ -68,12 +82,17 @@ pub fn patch(settings: &BTreeMap<String, Value>, report: &mut Report) -> Option<
         enable_usage: flag("enable_usage"),
         enable_tokenizer_vocabs: flag("enable_tokenizer_vocabs"),
         enable_tokenizer_download: flag("enable_tokenizer_download"),
-        retention_days: count("retention_days")
-            .and_then(|n| u32::try_from(n).ok())
-            .map(Some),
-        max_database_size_mb: count("max_database_size_mb")
-            .and_then(|n| i64::try_from(n).ok())
-            .map(Some),
+        retention_days: retention,
+        capture_payload_retention_days: retention,
+        quota_observation_retention_days: retention,
+        // v3 had only the whole-database budget, retained below. Adding a
+        // second, independent payload budget would delete previously kept
+        // bodies even when the database remains within its original budget.
+        capture_payload_max_mb: settings
+            .contains_key("max_database_size_mb")
+            .then_some(None),
+        max_database_size_mb: nullable_count("max_database_size_mb")
+            .and_then(|value| value.map(i64::try_from).transpose().ok()),
         update_channel: update_channel.map(Some),
         enable_auto_update_check: flag("enable_auto_update_check"),
         ..InstanceSettingsPatch::default()
@@ -125,6 +144,23 @@ fn is_default(key: &str, value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_unlimited_history_does_not_inherit_new_retention_defaults() {
+        let settings = serde_json::from_value(json!({
+            "retention_days": null, "max_database_size_mb": null,
+        }))
+        .unwrap();
+        let instance = patch(&settings, &mut Report::default())
+            .unwrap()
+            .instance
+            .unwrap();
+        assert_eq!(instance.retention_days, Some(None));
+        assert_eq!(instance.capture_payload_retention_days, Some(None));
+        assert_eq!(instance.quota_observation_retention_days, Some(None));
+        assert_eq!(instance.capture_payload_max_mb, Some(None));
+        assert_eq!(instance.max_database_size_mb, Some(None));
+    }
 
     #[test]
     fn v3_settings_become_a_patch_under_v4s_names() {

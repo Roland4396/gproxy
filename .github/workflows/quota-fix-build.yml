@@ -1,0 +1,98 @@
+name: Upgrade v4 · Linux image
+
+on:
+  push:
+    branches: [feat/upgrade-v4-preserve-local-20261008]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-v4-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8
+      GPROXY_BUILD_VERSION: 4.1.1+local.upgrade1
+      GPROXY_BUILD_CHANNEL: dev
+      GPROXY_BUILD_HASH: ${{ github.sha }}
+      GPROXY_INSTALLATION_KIND: container
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Native dependencies (isolated GitHub runner only)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang cmake libclang-dev pkg-config libssl-dev
+          sudo fallocate -l 8G /swapfile-gproxy-upgrade
+          sudo chmod 600 /swapfile-gproxy-upgrade
+          sudo mkswap /swapfile-gproxy-upgrade
+          sudo swapon /swapfile-gproxy-upgrade
+          echo "GPROXY_UPDATE_PUBKEY=$(cat .gitlab/update-public-key)" >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: console/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+          cache: pnpm
+          cache-dependency-path: console/pnpm-lock.yaml
+      - name: Console validation and embedded assets
+        working-directory: console
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm test
+          pnpm build
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: upgrade-v4-native
+          cache-on-failure: true
+      - name: Formatting and offline history projections
+        run: |
+          cargo fmt --all --check
+          python3 -m unittest discover -s _ops/tests -v
+      - name: Backend and channel regressions (synthetic credentials only)
+        run: |
+          cargo test --locked \
+            -p gproxy-protocol -p gproxy-channel -p gproxy-core -p gproxy-store \
+            -p gproxy-sdk -p gproxy-app -p gproxy-host-axum -p gproxy --lib --tests
+      - name: Compile the v4 production CLI/server
+        run: cargo build --locked --release --package gproxy --bin gproxy
+      - name: Assemble and verify immutable image
+        run: |
+          mkdir -p dist/data artifact
+          cp target/release/gproxy dist/gproxy
+          cp target/release/gproxy artifact/gproxy
+          image="gproxy-local:upgrade-v4-${GITHUB_SHA::12}"
+          docker build -f deploy/container/Dockerfile.release \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GPROXY_BUILD_VERSION}" \
+            -t "$image" .
+          docker run --rm --network none "$image" --version
+          docker run --rm --network none "$image" --help >/dev/null
+          docker save "$image" | gzip > artifact/gproxy-upgrade-image.tar.gz
+          docker image inspect "$image" --format '{{.Id}}' > artifact/image-id.txt
+          jq -n --arg commit "$GITHUB_SHA" --arg image "$image" --arg version "$GPROXY_BUILD_VERSION" \
+            '{commit:$commit,image:$image,version:$version}' > artifact/build-info.json
+          cd artifact
+          sha256sum gproxy gproxy-upgrade-image.tar.gz image-id.txt build-info.json > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gproxy-upgrade-v4-linux-amd64
+          path: artifact/
+          retention-days: 30
+          if-no-files-found: error

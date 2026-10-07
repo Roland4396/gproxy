@@ -80,7 +80,7 @@ pub fn translate(provider: &Provider<'_>, config: &mut Value, report: &mut Repor
 
     match credential_strategy.map(str::trim) {
         None | Some("") => {}
-        Some(strategy @ ("round_robin" | "sticky")) => {
+        Some(strategy @ ("round_robin" | "sticky" | "earliest_reset")) => {
             map.entry("credential_strategy")
                 .or_insert_with(|| json!(strategy));
         }
@@ -256,6 +256,19 @@ mod tests {
         };
         translate(&provider, &mut config, &mut report);
         (config, report)
+    }
+
+    #[test]
+    fn earliest_reset_strategy_survives_v3_import() {
+        let (config, report) = run(
+            "antigravity",
+            None,
+            Some("earliest_reset"),
+            Credentials::default(),
+            json!({}),
+        );
+        assert_eq!(config, json!({"credential_strategy": "earliest_reset"}));
+        assert!(report.warnings.is_empty());
     }
 
     #[test]
