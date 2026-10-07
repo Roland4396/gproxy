@@ -78,3 +78,9 @@ Keep a complete tested rollback. Do not treat backups alone as history parity.
 - Subsequent CI logs identified a test-only unsuffixed millisecond literal and the frontend's
   mandatory static i18n-key scanner. Added the explicit i64 type and static translation calls;
   neither failure reached release/deployment. Full CI must still pass on the corrected source.
+- Compatibility review traced Google token refresh to v4's nested `provider_fields` envelope,
+  while the existing private keeper reads flat `project_id`. Added a scoped legacy-only
+  projection and synthetic regression that preserves native tokens/envelope and flat precedence.
+- Added read-only real-snapshot parity auditor, network-isolated native import/canary driver,
+  and explicit functional/visual/WebKit QA inventory. Ten Python tests pass; full native schema
+  execution awaits the immutable GitHub artifact.

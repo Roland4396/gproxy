@@ -205,7 +205,21 @@ fn project(kind: Projection, value: Value) -> Result<Value, &'static str> {
             }
             Value::Array(items.iter().map(old_row).collect())
         }
-        Projection::Reveal => json!({"secret":value}),
+        Projection::Reveal => {
+            // Google refresh writes account facts in provider_fields in v4;
+            // the v3 keeper still reads project_id at the top level. Keep the
+            // native envelope and expose its fields without replacing tokens
+            // or an already present flat field. This runs only after native
+            // scoped disclosure and audit have succeeded.
+            let mut secret = value;
+            let fields = secret["provider_fields"].as_object().cloned();
+            if let (Some(object), Some(fields)) = (secret.as_object_mut(), fields) {
+                for (name, value) in fields {
+                    object.entry(name).or_insert(value);
+                }
+            }
+            json!({"secret":secret})
+        }
         Projection::Probe => json!({
             "snapshot":if value["snapshot"].is_object() {old_snapshot(&value["snapshot"])} else {json!({"sources":[],"entries":[]})},
             // Actual redacted upstream evidence, not a fabricated success flag.
@@ -424,6 +438,34 @@ mod tests {
         .unwrap();
         assert_eq!(result["raw"], json!([]));
         assert_eq!(result["snapshot"]["sources"], json!([]));
+    }
+
+    #[test]
+    fn refreshed_oauth_account_facts_stay_readable_by_v3_clients() {
+        let result = project(
+            Projection::Reveal,
+            json!({"access_token":"synthetic-token","project_id":"flat-project",
+                "provider_fields":{"project_id":"nested-project","user_email":"synthetic@example.test"}}),
+        )
+        .unwrap();
+        assert_eq!(result["secret"]["access_token"], "synthetic-token");
+        assert_eq!(result["secret"]["project_id"], "flat-project");
+        assert_eq!(result["secret"]["user_email"], "synthetic@example.test");
+        assert_eq!(
+            result["secret"]["provider_fields"]["project_id"],
+            "nested-project"
+        );
+        let refreshed = project(
+            Projection::Reveal,
+            json!({"access_token":"synthetic-token","provider_fields":{"project_id":"refreshed-project"}}),
+        )
+        .unwrap();
+        assert_eq!(refreshed["secret"]["project_id"], "refreshed-project");
+        let old = json!({"project_id":"old-project","access_token":"synthetic-token"});
+        assert_eq!(
+            project(Projection::Reveal, old.clone()).unwrap()["secret"],
+            old
+        );
     }
 
     #[test]

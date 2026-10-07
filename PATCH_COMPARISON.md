@@ -41,6 +41,9 @@ Paths in the table are relative to `crates/gproxy-*` or `console/src` as named.
   Antigravity source IDs are grouped under their old `subscription` capability for these clients.
   Native auth/scope/CSRF/audit remain the only authority; inference/SSE/WebSocket traffic bypasses
   the adapter. Incomplete legacy list projection fails explicitly rather than hiding accounts.
+  After Google refresh, native account facts move into `provider_fields`; the legacy scoped
+  reveal additionally exposes those fields flat, retaining the envelope and existing flat values.
+  A synthetic regression covers both newly refreshed and original v3 secret layouts.
 - No production route/model/account removal and no production restart during implementation.
   Claude's current Stream effort preference is medium, independent of the Gproxy image upgrade.
 
