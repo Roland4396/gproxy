@@ -58,8 +58,12 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          key: upgrade-v4-native
+          key: upgrade-v4-native-full
           cache-on-failure: true
+          # The protocol library is a large workspace crate. The default
+          # caches only third-party dependencies, causing it to be recompiled
+          # for every small port. Keep workspace artifacts as well.
+          cache-workspace-crates: true
       - name: Formatting and offline history projections
         run: |
           cargo fmt --all --check

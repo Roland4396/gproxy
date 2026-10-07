@@ -59,3 +59,7 @@ Paths in the table are relative to `crates/gproxy-*` or `console/src` as named.
 - [ ] Production health/parity, rollback rehearsal and final report.
 
 No paid inference, live cloned-account refresh/probe or GPU wakeup is permitted for validation.
+
+CI also caches workspace artifacts explicitly: the action's default only caches
+dependencies, which otherwise recompiled the large protocol workspace library on
+every small patch. See [the action's workspace-cache option](https://github.com/Swatinem/rust-cache#example-usage).
