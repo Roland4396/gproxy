@@ -74,10 +74,18 @@ try{
   }
   async function activate(locator){
    if(mode!=='iphone')return locator.click();
-   const box=await locator.boundingBox();
+   let box=await locator.boundingBox();
    if(!box)throw Error('touch target missing');
    const viewport=page.viewportSize();
-   const x=box.x+box.width/2,y=box.y+box.height/2;
+   let x=box.x+box.width/2,y=box.y+box.height/2;
+   if(x<0||x>viewport.width||y<0||y>viewport.height){
+    // Mobile text input may scroll the document to its focused field.
+    // Stage the viewport as a user could by scrolling, then use touch input.
+    await locator.evaluate(el=>el.scrollIntoView({block:'center',inline:'nearest'}));
+    await page.waitForTimeout(350);box=await locator.boundingBox();
+    if(!box)throw Error('touch target missing after scroll');
+    x=box.x+box.width/2;y=box.y+box.height/2;
+   }
    if(x<0||x>viewport.width||y<0||y>viewport.height)throw Error('touch target outside viewport');
    await page.touchscreen.tap(x,y);
   }
@@ -154,9 +162,10 @@ try{
    if(await trend.getAttribute('aria-expanded')!=='false')throw Error('trend did not collapse');
   }
   await activate(dialog.getByRole('button',{name:'Close',exact:true}).last());
-  await page.getByRole('tab',{name:'Routing rules',exact:true}).click();
+  await dialog.waitFor({state:'hidden'});await page.waitForTimeout(250);
+  await activate(page.getByRole('tab',{name:'Routing rules',exact:true}));
   await page.waitForURL('**/v3-providers-4/routing');await screenshot('routing');
-  await page.getByRole('tab',{name:'Models',exact:true}).click();
+  await activate(page.getByRole('tab',{name:'Models',exact:true}));
   await page.waitForURL('**/v3-providers-4/models');await screenshot('models-pricing');
   if(mode==='desktop'){
    const modelSearch=page.getByRole('textbox',{name:'Search',exact:true});

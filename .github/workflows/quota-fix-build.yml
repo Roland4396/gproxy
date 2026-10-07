@@ -29,9 +29,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Native dependencies (isolated GitHub runner only)
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends clang cmake libclang-dev pkg-config libssl-dev
+          # The prior runner log measured azure.archive.ubuntu.com at 52.8
+          # kB/s (47.7 MB took 15 minutes). This is runner-local, not host APT.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          fi
+          if [ -f /etc/apt/apt-mirrors-security.txt ]; then
+            printf '%s\n' 'https://security.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors-security.txt >/dev/null
+          fi
+          date -u
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 update
+          date -u
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 install -y --no-install-recommends clang cmake libclang-dev pkg-config libssl-dev
+          date -u
           sudo fallocate -l 8G /swapfile-gproxy-upgrade
           sudo chmod 600 /swapfile-gproxy-upgrade
           sudo mkswap /swapfile-gproxy-upgrade

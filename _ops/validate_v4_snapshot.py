@@ -16,6 +16,7 @@ import subprocess
 
 from audit_v4_snapshot import audit
 from migrate_history_v3 import migrate
+from audit_secret_payloads import audit_secret_payloads
 
 
 def run(args, **kw):
@@ -94,6 +95,8 @@ def main():
     private_json(args.work / "history-projection.json", projection)
     parity = audit(copied, target)
     private_json(args.work / "parity-audit.json", parity)
+    secret_parity = audit_secret_payloads(copied, target, key)
+    private_json(args.work / "secret-payload-parity.json", secret_parity)
     # A second history run must be an exact no-op, not duplicate native rows.
     repeated = migrate(copied, target)
     if not repeated.get("already_imported"):
@@ -143,6 +146,7 @@ print(json.dumps({'health_http':200,'login_http':200,'providers':len(providers),
         result = {"passed": True, "image": args.image, "network": "none", "published_ports": 0,
                   "source_sha256": before, "source_unchanged": hashlib.sha256(args.snapshot.read_bytes()).hexdigest() == before,
                   "archive_tables": len(parity["archives"]), "native_checks": parity["native_checks"],
+                  "secret_payload_parity": secret_parity,
                   "management": management, "paid_inference_requests": 0, "gpu_requests": 0}
     finally:
         if created:
@@ -161,6 +165,8 @@ print(json.dumps({'health_http':200,'login_http':200,'providers':len(providers),
     post_parity = audit(copied, postboot)
     private_json(args.work / "postboot-parity-audit.json", post_parity)
     result["postboot_parity"] = True
+    if audit_secret_payloads(copied, postboot, key) != secret_parity:
+        raise AssertionError("secret payloads changed after management boot")
     if not result["source_unchanged"]:
         raise AssertionError("original source snapshot changed")
     private_json(args.work / "result.json", result)
