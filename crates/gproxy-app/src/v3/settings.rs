@@ -122,8 +122,16 @@ pub fn patch(settings: &BTreeMap<String, Value>, report: &mut Report) -> Option<
             report.drop_row("settings", format!("{key} = {value}"), why);
         }
     }
-    let empty = serde_json::to_value(&instance).ok()
-        == serde_json::to_value(InstanceSettingsPatch::default()).ok()
+    // Option<Option<T>> serializes both absent and explicit-null as null.
+    // Do not let the JSON equality check erase a null-only policy update.
+    let has_nullable_edits = instance.retention_days.is_some()
+        || instance.capture_payload_retention_days.is_some()
+        || instance.capture_payload_max_mb.is_some()
+        || instance.quota_observation_retention_days.is_some()
+        || instance.max_database_size_mb.is_some();
+    let empty = !has_nullable_edits
+        && serde_json::to_value(&instance).ok()
+            == serde_json::to_value(InstanceSettingsPatch::default()).ok()
         && serde_json::to_value(&logging).ok()
             == serde_json::to_value(LoggingSettingsPatch::default()).ok();
     (!empty).then_some(SettingsPatch {

@@ -84,6 +84,21 @@ fn seconds(value: &Value) -> Value {
         .unwrap_or(Value::Null)
 }
 
+fn old_source(id: &Value, source: &Value) -> Value {
+    // v4 gives Antigravity each bucket its own source id; the existing
+    // private scheduler groups all four under v3's subscription capability.
+    if id == source
+        && matches!(
+            id.as_str(),
+            Some("gemini-5h" | "gemini-weekly" | "3p-5h" | "3p-weekly")
+        )
+    {
+        json!("subscription")
+    } else {
+        source.clone()
+    }
+}
+
 /// Native DTO entry -> the old tagged `value` and second-based boundaries.
 fn dto_entry(entry: &Value) -> Value {
     let allowance = &entry["allowance"];
@@ -103,7 +118,7 @@ fn dto_entry(entry: &Value) -> Value {
         value["remaining"] = entry["balance"]["remaining"].clone();
         value["unit"] = entry["balance"]["unit"].clone();
     }
-    json!({"id":entry["id"],"source_id":entry["sourceId"],
+    json!({"id":entry["id"],"source_id":old_source(&entry["id"], &entry["sourceId"]),
         "label":entry["label"],"subject":entry["subject"],
         "model_scope":entry["modelScope"],"value":value})
 }
@@ -140,7 +155,8 @@ pub(crate) fn cached_snapshot(rows: &[gproxy_sdk::dto::QuotaObservationDto]) -> 
     for row in rows {
         let s = &row.snapshot;
         let Some(id) = s["id"].as_str() else { continue };
-        let Some(source) = s["source_id"].as_str() else {
+        let source_value = old_source(&s["id"], &s["source_id"]);
+        let Some(source) = source_value.as_str() else {
             continue;
         };
         let key = (source.to_owned(), id.to_owned());
@@ -408,6 +424,19 @@ mod tests {
         .unwrap();
         assert_eq!(result["raw"], json!([]));
         assert_eq!(result["snapshot"]["sources"], json!([]));
+    }
+
+    #[test]
+    fn fresh_v4_antigravity_sources_keep_the_private_subscription_contract() {
+        let result = old_snapshot(&json!({"observedAtMs":1791390000000_i64,"entries":[
+            {"id":"3p-weekly","sourceId":"3p-weekly","kind":"window","allowance":{"usedPercent":"100"}},
+            {"id":"3p-5h","sourceId":"3p-5h","kind":"window","label":"antigravity_disabled","allowance":{"usedPercent":null}}
+        ]}));
+        assert_eq!(result["sources"].as_array().unwrap().len(), 1);
+        assert_eq!(result["sources"][0]["capability"]["id"], "subscription");
+        assert_eq!(result["sources"][0]["observed_at_ms"], 1791390000000_i64);
+        assert_eq!(result["entries"][0]["source_id"], "subscription");
+        assert!(result["entries"][1]["value"]["used_percent"].is_null());
     }
 
     #[test]

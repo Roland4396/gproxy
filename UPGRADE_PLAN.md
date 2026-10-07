@@ -65,3 +65,10 @@ Keep a complete tested rollback. Do not treat backups alone as history parity.
   subscription route; user cancelled the account/VNC investigation and resumed upgrade.
 - Latest user preference: Stream Claude effort is **medium** again. In-place CAS
   update preserved inode and every other setting; live blue container readback passed.
+- Exact comparison found two incomplete upstream equivalents: disabled-window UI/marker
+  and account-scoped runtime headers. Both are explicitly ported; current v4 CLI grammar
+  and canonical caller session preservation remain intact. Added channel and console tests.
+- Native CI `37674738072` completed compilation but correctly failed our explicit-null
+  retention regression: JSON equality treated `Some(None)` as the default `None` patch.
+  Fixed patch-presence detection from that log evidence; no release artifact was deployed.
+- Added `PATCH_COMPARISON.md` covering every fork-only commit and pending acceptance gates.

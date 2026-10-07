@@ -13,8 +13,8 @@
 //! `remainingFraction` (the share LEFT) and `resetTime`. A free account
 //! reports only the weekly buckets. A bucket marked `disabled` is not an
 //! allowance (the 5-hour bucket once the weekly one is spent reads
-//! `remainingFraction: 1, disabled: true`), so it yields no reading and the
-//! weekly bucket keeps blocking.
+//! `remainingFraction: 1, disabled: true`), so it yields a display-only
+//! inactive marker with no usable reading and the weekly bucket keeps blocking.
 //!
 //! Which models belong to a family comes from the catalogue call,
 //! `POST {base}/v1internal:fetchAvailableModels` with `{}`, whose entries
@@ -162,6 +162,11 @@ impl QuotaModel for Antigravity {
         declared: &'d [QuotaDimension],
         entry: &QuotaEntry,
     ) -> Option<Cow<'d, QuotaDimension>> {
+        // An inactive placeholder explains the upstream state, but cannot
+        // open/advance a billing cycle, clear a block, or win reset ordering.
+        if entry.label.as_deref() == Some("antigravity_disabled") {
+            return None;
+        }
         let dimension = classify_by_id(declared, entry)?;
         if dimension.scope != QuotaScope::Unknown
             || !matches!(entry.model_scope, QuotaScope::Models(_))
@@ -251,7 +256,7 @@ impl Catalogue {
 }
 
 /// The summary's buckets as windows, scoped to the catalogue's families.
-/// Unknown buckets and disabled ones yield nothing.
+/// Unknown buckets yield nothing; disabled ones keep a display-only marker.
 pub(super) fn summary_entries(body: &[u8], catalogue: Option<&[u8]>) -> Vec<QuotaEntry> {
     let Ok(summary) = serde_json::from_slice::<Value>(body) else {
         return Vec::new();
@@ -276,17 +281,16 @@ pub(super) fn summary_entries(body: &[u8], catalogue: Option<&[u8]>) -> Vec<Quot
         else {
             continue;
         };
-        if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
+        let disabled = bucket.get("disabled").and_then(Value::as_bool) == Some(true);
         let used = bucket
             .get("remainingFraction")
             .and_then(Value::as_f64)
-            .and_then(used_percent);
+            .and_then(used_percent)
+            .filter(|_| !disabled);
         let reset = code_assist::text(bucket, "resetTime").and_then(iso_to_ms);
         entries.push(code_assist::quota::window(
             id.to_owned(),
-            Some(label(family, span)),
+            Some(if disabled { "antigravity_disabled".to_owned() } else { label(family, span) }),
             catalogue
                 .as_ref()
                 .map_or(QuotaScope::Unknown, |catalogue| catalogue.scope(family)),
@@ -332,6 +336,7 @@ impl QuotaQuery for Antigravity {
                 let token = super::access_token(&context.credential)?;
                 let mut headers = HeaderMap::new();
                 apply_headers(&mut headers, &config, token, true)?;
+                super::identity::apply(&mut headers, &context.credential, None)?;
                 let (status, _, summary) = code_assist::send(
                     context.client,
                     Method::POST,

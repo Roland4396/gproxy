@@ -40,6 +40,7 @@
 //! (`antigravity_executor_request.go::geminiToAntigravity`).
 
 mod claude;
+mod identity;
 mod models;
 mod oauth;
 mod quota;
@@ -448,6 +449,7 @@ impl Antigravity {
         let parsed = serde_json::from_slice::<Value>(&buffered).ok();
         let model = code_assist::request_model(&path, parsed.as_ref()).unwrap_or_default();
 
+        let mut identity_session = None;
         let (body, stream) = match operation {
             // The catalogue call takes an empty body and no project.
             Operation::ListModels | Operation::GetModel => (Bytes::from_static(b"{}"), false),
@@ -466,6 +468,7 @@ impl Antigravity {
                     claude::apply_limits(request, parsed.as_ref().and_then(claude::output_limit));
                 }
                 agent_envelope(&mut envelope, &model)?;
+                identity_session = envelope.pointer("/request/sessionId").and_then(Value::as_str).map(str::to_owned);
                 (
                     code_assist::encode(&envelope, ChannelError::InvalidConfig)?,
                     operation == Operation::StreamGenerateContent,
@@ -498,6 +501,7 @@ impl Antigravity {
             token,
             matches!(operation, Operation::ListModels | Operation::GetModel),
         )?;
+        identity::apply(&mut headers, &ctx.credential, identity_session.as_deref())?;
         let mut builder = http::Request::builder().method(Method::POST).uri(uri);
         if let Some(map) = builder.headers_mut() {
             *map = headers;
@@ -666,6 +670,7 @@ pub(super) fn catalog_request(
     let token = access_token(credential)?;
     let mut headers = HeaderMap::new();
     apply_headers(&mut headers, config, token, true)?;
+    identity::apply(&mut headers, credential, None)?;
     Ok((
         format!(
             "{}{}",

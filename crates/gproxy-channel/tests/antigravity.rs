@@ -228,6 +228,10 @@ fn prepare_sends_the_editor_identity_and_a_client_cannot_spoof_it() {
     let metadata = Value::Null;
     let mut headers = HeaderMap::new();
     headers.insert("user-agent", HeaderValue::from_static("claude-cli/2.1.258"));
+    headers.insert(
+        "x-machine-id",
+        HeaderValue::from_static("client-supplied-identity"),
+    );
     headers.insert("cookie", HeaderValue::from_static("SID=stolen"));
     headers.insert(
         "accept-encoding",
@@ -249,6 +253,13 @@ fn prepare_sends_the_editor_identity_and_a_client_cannot_spoof_it() {
         HeaderValue::from_static(CLI_USER_AGENT)
     );
     assert_eq!(prepared.headers()["content-type"], "application/json");
+    assert_eq!(prepared.headers()["x-client-name"], "antigravity");
+    assert_eq!(prepared.headers()["x-client-version"], "1.2.16");
+    assert_ne!(
+        prepared.headers()["x-machine-id"],
+        "client-supplied-identity"
+    );
+    assert!(prepared.headers().contains_key("x-vscode-sessionid"));
     assert!(!prepared.headers().contains_key("cookie"));
     assert!(!prepared.headers().contains_key("accept-encoding"));
     // Unlike the Gemini CLI, Antigravity sends no Node client banner and no
@@ -993,7 +1004,7 @@ async fn the_summary_reports_each_familys_windows() {
     assert!(!placed.scope.matches("gemini-3-flash"));
 
     // A paid account has both spans; a disabled 5-hour bucket (the weekly
-    // one spent) is no allowance and yields no reading.
+    // one spent) is display-only, not a zero-used available allowance.
     let summary = json!({"groups": [{"buckets": [
         {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0,
          "resetTime": "2026-10-03T11:04:04Z"},
@@ -1006,9 +1017,13 @@ async fn the_summary_reports_each_familys_windows() {
     let (entries, _) = quota_run(serde_json::from_str(IDLE).unwrap(), Some(summary)).await;
     assert_eq!(
         entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
-        ["3p-weekly", "gemini-5h"]
+        ["3p-weekly", "3p-5h", "gemini-5h"]
     );
     assert_eq!(reading(&entries, "3p-weekly").0, Some(100.into()));
+    let inactive = entries.iter().find(|e| e.id == "3p-5h").unwrap();
+    assert_eq!(inactive.label.as_deref(), Some("antigravity_disabled"));
+    assert_eq!(reading(&entries, "3p-5h").0, None);
+    assert!(model.classify(&declared, inactive).is_none());
 }
 
 #[tokio::test]

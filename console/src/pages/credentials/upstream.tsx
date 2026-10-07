@@ -41,7 +41,7 @@ export function UpstreamQuota({ id, provider }: { id: string; provider: Credenti
     startsAtMs: entry.allowance?.periodStartMs,
     used: entry.allowance?.used, limit: entry.allowance?.limit, remaining: entry.allowance?.remaining ?? entry.balance?.remaining,
     unlimited: entry.allowance?.unlimited, unit: entry.allowance?.unit ?? entry.balance?.unit,
-    usedPercent: entry.allowance?.usedPercent, resetsAtMs: entry.allowance?.periodEndMs,
+    usedPercent: entry.label === "antigravity_disabled" ? null : entry.allowance?.usedPercent, resetsAtMs: entry.allowance?.periodEndMs,
   })) : []
   // Without a live answer, each open cycle's last reading stands in for its
   // window; with one, a cycle the upstream does not report (a credential's
@@ -79,19 +79,20 @@ export function UpstreamQuota({ id, provider }: { id: string; provider: Credenti
     {probe.error ? <ErrorNotice error={probe.error} /> : null}
     <QueryState isPending={saved.isPending || (probe.isFetching && !entries.length)} error={saved.error}>
       {!windows.length ? <EmptyNotice title={t("limits.noObservation")} /> : null}
-      {windows.map(entry => { const open = openCycles.find(cycle => cycle.windowId === entry.id); const closed = cycles.filter(cycle => cycle.closedAtMs != null && cycle.windowId === entry.id); const hasTrend = (entry.kind === "window" || entry.kind === "budget") && entry.id !== "month"; const expanded = expandedWindows.includes(entry.id); return <Card key={entry.id} size="sm" className="gap-1 py-2"><CardHeader className="grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_minmax(3rem,1fr)_auto_minmax(7rem,auto)] items-center gap-2 px-3">
+      {windows.map(entry => { const inactive = entry.label === "antigravity_disabled"; const open = openCycles.find(cycle => cycle.windowId === entry.id); const closed = cycles.filter(cycle => cycle.closedAtMs != null && cycle.windowId === entry.id); const hasTrend = !inactive && (entry.kind === "window" || entry.kind === "budget") && entry.id !== "month"; const expanded = expandedWindows.includes(entry.id); return <Card key={entry.id} size="sm" className="gap-1 py-2"><CardHeader className="grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_minmax(3rem,1fr)_auto_minmax(7rem,auto)] items-center gap-2 px-3">
         <div className="flex min-w-0 items-center gap-1">
           <CardTitle className="min-w-0 truncate" title={title(entry)}>{title(entry)}</CardTitle>
           {hasTrend ? <Button type="button" size="icon-xs" variant={expanded ? "secondary" : "ghost"} className="shrink-0" title={t(expanded ? "limits.hideQuotaTrend" : "limits.showQuotaTrend")} aria-label={`${title(entry)} · ${t(expanded ? "limits.hideQuotaTrend" : "limits.showQuotaTrend")}`} aria-expanded={expanded} aria-controls={`${historyId}-${entry.id}`} onClick={() => setExpandedWindows(previous => expanded ? previous.filter(id => id !== entry.id) : [...previous, entry.id])}><ChartNoAxesCombined aria-hidden /></Button> : null}
         </div>
         {entry.usedPercent != null ? <Progress className="col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto" tone={Number(entry.usedPercent) >= 100 ? "destructive" : Number(entry.usedPercent) >= 80 ? "warning" : "success"} value={Math.min(100, Math.max(0, Number(entry.usedPercent)))} aria-label={title(entry)} /> : <span className="hidden sm:block" />}
-        <Badge variant={entry.usedPercent != null ? Number(entry.usedPercent) >= 100 ? "destructive" : Number(entry.usedPercent) >= 80 ? "warning" : "success" : entry.remaining != null && Number(entry.remaining) <= 0 ? "destructive" : "secondary"} className="justify-self-end whitespace-nowrap tabular-nums">{entry.usedPercent != null ? formatPercent(Number(entry.usedPercent) / 100, i18n.language)
+        <Badge variant={entry.usedPercent != null ? Number(entry.usedPercent) >= 100 ? "destructive" : Number(entry.usedPercent) >= 80 ? "warning" : "success" : entry.remaining != null && Number(entry.remaining) <= 0 ? "destructive" : "secondary"} className="justify-self-end whitespace-nowrap tabular-nums">{inactive ? "—" : entry.usedPercent != null ? formatPercent(Number(entry.usedPercent) / 100, i18n.language)
           : entry.kind === "balance" ? amount(entry.remaining, entry.unit)
             : entry.used == null && entry.limit == null ? entry.unlimited ? t("limits.unlimited") : "—"
               : `${amount(entry.used, entry.unit)} / ${entry.unlimited ? t("limits.unlimited") : amount(entry.limit, entry.unit)}`}</Badge>
-        {entry.resetsAtMs != null ? <time className="col-span-2 justify-self-end whitespace-nowrap text-xs tabular-nums text-muted-foreground sm:col-span-1" dateTime={new Date(entry.resetsAtMs).toISOString()} title={`${t("limits.resetsAt")}: ${formatInstant(entry.resetsAtMs, i18n.language)}`}>{resetTime.format(entry.resetsAtMs)}</time> : <span className="hidden sm:block" />}
+        {!inactive && entry.resetsAtMs != null ? <time className="col-span-2 justify-self-end whitespace-nowrap text-xs tabular-nums text-muted-foreground sm:col-span-1" dateTime={new Date(entry.resetsAtMs).toISOString()} title={`${t("limits.resetsAt")}: ${formatInstant(entry.resetsAtMs, i18n.language)}`}>{resetTime.format(entry.resetsAtMs)}</time> : <span className="hidden sm:block" />}
       </CardHeader>
-      {open || closed.length ? <CardContent className="px-3"><UpstreamCycles open={open} closed={closed} /></CardContent> : null}
+      {inactive ? <CardContent className="px-3 text-xs text-muted-foreground">{t("limits.antigravityDisabled")}</CardContent> : null}
+      {(!inactive && open) || closed.length ? <CardContent className="px-3"><UpstreamCycles open={inactive ? undefined : open} closed={closed} /></CardContent> : null}
       {hasTrend ? <CardContent id={`${historyId}-${entry.id}`} hidden={!expanded} className="px-3">{expanded ? <Suspense fallback={<LoadingRows />}><QuotaTrend id={id} windowId={entry.id} title={title(entry)} cycle={open} /></Suspense> : null}</CardContent> : null}
       </Card> })}
       {estimated ? <p className="text-xs text-muted-foreground">{t("limits.estimateHint")}</p> : null}

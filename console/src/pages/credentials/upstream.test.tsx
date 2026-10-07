@@ -24,6 +24,22 @@ beforeEach(() => {
   vi.mocked(quotaResetCredits).mockResolvedValue({ creditExpirationsMs: [], options: [], availableCount: 2, expiresAtMs: 1_800_000_000_000 })
   vi.mocked(resetUpstreamQuota).mockResolvedValue({ outcome: "reset", windowsReset: 1, reason: null })
 })
+it("retains the inactive Antigravity five-hour marker without implying available quota or an earlier reset", async () => {
+  vi.mocked(probeQuota).mockResolvedValue({ ...snapshot, entries: [
+    { ...snapshot.entries[0], id: "3p-weekly", sourceId: "3p-weekly", label: null,
+      allowance: { ...snapshot.entries[0].allowance!, usedPercent: "100" } },
+    { ...snapshot.entries[0], id: "3p-5h", sourceId: "3p-5h", label: "antigravity_disabled",
+      allowance: { ...snapshot.entries[0].allowance!, used: null, usedPercent: null, remaining: null } },
+  ] })
+  mount("antigravity")
+  expect(await screen.findByRole("heading", { name: "Claude / GPT · 5-hour quota (inactive)" })).toBeInTheDocument()
+  const inactive = screen.getByRole("heading", { name: "Claude / GPT · 5-hour quota (inactive)" }).closest('[data-slot="card"]')!
+  expect(within(inactive as HTMLElement).queryByRole("progressbar")).not.toBeInTheDocument()
+  expect(within(inactive as HTMLElement).queryByTitle(/^Next reset:/)).not.toBeInTheDocument()
+  expect(within(inactive as HTMLElement).queryByText("0%")).not.toBeInTheDocument()
+  expect(within(inactive as HTMLElement).getByText(/Check the weekly quota/)).toBeInTheDocument()
+  expect(screen.getByRole("progressbar", { name: "Claude / GPT · weekly quota" })).toHaveAttribute("aria-valuenow", "100")
+})
 it("renders the reported period and percent without exposing internal keys or epoch dates", async () => {
   mount()
   expect(await screen.findByRole("progressbar", { name: "7 days quota" })).toHaveAttribute("aria-valuenow", "96")
