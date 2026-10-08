@@ -1,0 +1,117 @@
+--- a/aetherstream/features/quota_keeper/client.py
++++ b/aetherstream/features/quota_keeper/client.py
+@@ -27,6 +27,13 @@
+ class GproxyClient:
+     def __init__(self, base_url: str, credentials_file: str):
+         self.base = base_url.rstrip('/') + '/admin/api/'
++        url = httpx.URL(self.base)
++        if url.scheme not in ('http', 'https') or not url.host:
++            raise ValueError('Gproxy base URL requires an HTTP(S) host')
++        # Match HTTPX's Host normalization (default ports, IPv6, IDNA).
++        # Cookies authenticate unsafe management calls, so v4 requires an
++        # explicit same-origin header; this is never sent to inference.
++        self.origin = url.scheme + '://' + url.netloc.decode('ascii')
+         self.credentials_file = credentials_file
+         self.session = None
+ 
+@@ -48,6 +55,7 @@
+     async def api(self, path: str, data=None):
+         response = await self.session.request(
+             'GET' if data is None else 'POST', self.base + path, json=data,
++            headers={'Origin': self.origin} if data is not None else None,
+         )
+         response.raise_for_status()
+         return response.json()
+--- a/aetherstream/features/quota_keeper/service.py
++++ b/aetherstream/features/quota_keeper/service.py
+@@ -97,8 +97,16 @@
+     else:
+         row.update(next_at=now + RETRY_DELAYS[count - 1], status="quota_retry_wait")
+     persist()
+-    emit("quota_failed", credential_id=row.get("credential_id"),
+-         failures=count, paused=bool(row.get("paused")), error_type=type(error).__name__)
++    fields = {"credential_id": row.get("credential_id"), "failures": count,
++              "paused": bool(row.get("paused")), "error_type": type(error).__name__}
++    if isinstance(error, httpx.HTTPStatusError):
++        # Status and a fixed operation label diagnose local auth/route errors
++        # without logging exception text, tokens, headers, bodies or URLs.
++        fields.update(http_status=error.response.status_code, method=error.request.method)
++        operation = error.request.url.path.rsplit('/', 1)[-1]
++        if operation in ('quota-probe', 'quota', 'reveal', 'login', 'providers', 'credentials'):
++            fields['operation'] = operation.replace('-', '_')
++    emit("quota_failed", **fields)
+ 
+ 
+ 
+--- a/tests/test_quota_keeper.py
++++ b/tests/test_quota_keeper.py
+@@ -189,6 +189,21 @@
+             if delay:
+                 self.assertEqual(row['next_at'], NOW+delay)
+         self.assertTrue(row['paused'])
++
++    async def test_http_failure_logs_safe_status_and_operation_only(self):
++        request = httpx.Request('POST', 'http://private:8787/admin/api/credentials/9/quota-probe?token=PRIVATE',
++                                headers={'Authorization': 'Bearer PRIVATE'})
++        response = httpx.Response(403, request=request, text='PRIVATE response body')
++        error = httpx.HTTPStatusError('PRIVATE exception message', request=request, response=response)
++        fields = []
++        row = {'credential_id': 9, 'guard_until': NOW + 18030, 'triggers': 3}
++        quota_failure(row, NOW, error, lambda: None, lambda event, **data: fields.append((event, data)))
++        event, data = fields[0]
++        self.assertEqual(event, 'quota_failed')
++        self.assertEqual((data['http_status'], data['method'], data['operation']), (403, 'POST', 'quota_probe'))
++        self.assertNotIn('PRIVATE', json.dumps(data))
++        self.assertNotIn('private:8787', json.dumps(data))
++        self.assertEqual((row['guard_until'], row['triggers']), (NOW + 18030, 3))
+ 
+     async def test_disable_or_stop_during_probe_prevents_generation(self):
+         api = FakeApi()
+@@ -376,6 +391,47 @@
+ 
+ 
+ class TransportTests(unittest.IsolatedAsyncioTestCase):
++    async def test_cookie_management_posts_carry_exact_origin_and_gets_do_not(self):
++        cases = ['http://gproxy:8787', 'http://gproxy:80/prefix',
++                 'https://GPROXY:443/prefix', 'http://[::1]:8787/prefix']
++        for base in cases:
++            with self.subTest(base=base), tempfile.TemporaryDirectory() as directory:
++                credentials = Path(directory, 'fake.env')
++                credentials.write_text('GPROXY_ADMIN_USER=fake\nGPROXY_ADMIN_PASSWORD=fake-password\n')
++                requests = []
++                def handler(request):
++                    requests.append(request)
++                    expected = request.url.scheme + '://' + request.headers['host']
++                    if request.method == 'POST':
++                        self.assertEqual(request.headers.get('origin'), expected)
++                    else:
++                        self.assertNotIn('origin', request.headers)
++                    if request.url.path.endswith('/login'):
++                        return httpx.Response(200, json={'ok': True}, headers={'Set-Cookie': 'gproxy_session=fake; Path=/'})
++                    self.assertIn('gproxy_session=fake', request.headers.get('cookie', ''))
++                    if request.url.path.endswith('/quota-probe'):
++                        self.assertEqual(request.url.query, b'force=true')
++                        return httpx.Response(200, json={'raw': ['synthetic-evidence'], 'snapshot': snapshot()})
++                    if request.url.path.endswith('/reveal'):
++                        return httpx.Response(200, json={'secret': {'project_id': 'fake'}})
++                    return httpx.Response(200, json=snapshot())
++                session = httpx.AsyncClient(transport=httpx.MockTransport(handler), trust_env=False)
++                with patch('aetherstream.features.quota_keeper.client.httpx.AsyncClient', return_value=session):
++                    async with GproxyClient(base, str(credentials)) as api:
++                        await api.cached(13)
++                        with patch('aetherstream.features.quota_keeper.client.time.time', return_value=NOW):
++                            await api.probe(13)
++                        await api.api('credentials/13/reveal', {})
++                self.assertEqual(len(requests), 4)
++                self.assertEqual([r.method for r in requests], ['POST', 'GET', 'POST', 'POST'])
++                self.assertTrue(session.is_closed)
++                self.assertTrue(all(r.url.host == httpx.URL(base).host for r in requests))
++
++    async def test_invalid_management_base_rejected(self):
++        for base in ('file:///private', '/missing-host', 'ftp://gproxy'):
++            with self.subTest(base=base), self.assertRaises(ValueError):
++                GproxyClient(base, 'unused')
++
+     async def test_stale_probe_rejected(self):
+         api = GproxyClient('http://test', 'unused')
+         api.api = AsyncMock(return_value={'raw': '', 'snapshot': snapshot()})

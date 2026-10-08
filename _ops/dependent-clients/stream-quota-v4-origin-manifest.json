@@ -1,0 +1,19 @@
+{
+  "patch_sha256": "3a52497e3f0b036839fc938cd10894dacc954ddff1977fcade0b9748f866ff6c",
+  "files": {
+    "aetherstream/features/quota_keeper/client.py": {
+      "before": "d44e8451fa92644845a0f2585af46f2504f048dab7baf07f8110e4e36f2cd5c8",
+      "after": "60d5513082de5ce39a9fe27050a26b779875a0affb3aa58893c4d19e8c5b4e7c"
+    },
+    "aetherstream/features/quota_keeper/service.py": {
+      "before": "f02c1c78b91d9d6034271a9de3e31e550fd8f27b459e2b91ba2db0031f067a32",
+      "after": "e1e1b4d8a89b11b8e47e3cd5c2c8ba6497fe4461f8865aa7dd2b094c618a23ed"
+    },
+    "tests/test_quota_keeper.py": {
+      "before": "36649cf650fb1149c66383d1f9f37494942ef7beae7fdfaa97026adfe65950fa",
+      "after": "c364c58761cd45f33bc947af0cb73ed04a2e8812b0745374e9da59c8ba4097b3"
+    }
+  },
+  "tested_offline": true,
+  "other_source_changes_not_committed_or_deployed": true
+}

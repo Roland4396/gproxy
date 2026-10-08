@@ -90,3 +90,14 @@ No paid inference, live cloned-account refresh/probe or GPU wakeup is permitted 
 CI also caches workspace artifacts explicitly: the action's default only caches
 dependencies, which otherwise recompiled the large protocol workspace library on
 every small patch. See [the action's workspace-cache option](https://github.com/Swatinem/rust-cache#example-usage).
+
+### Follow-up integration correction (2026-10-08 10:32 CST)
+
+The existing Stream keeper's GET-only production checks did not cover its unsafe
+cookie POSTs. Actual audits subsequently showed quota-diagnostics 403: v4's stricter
+same-origin rule intentionally rejects the missing Origin accepted by v3. Fixed the
+client, **not** the security gate. The [retained client patch and evidence](
+_ops/dependent-clients/README.md) covers actual installed-image fake-upstream POSTs,
+271 offline tests and real local SSE/WebSocket rolling promotion/rollback. A normal
+rolling release is complete; user-authorized recovery of 9/16/21 has 200 responses
+and confirmed cycles. Old generation-error pauses and all request guards remain.

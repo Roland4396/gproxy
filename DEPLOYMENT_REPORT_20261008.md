@@ -75,3 +75,13 @@
 ## 已知实施事件
 
 早期本机首次 Rust 编译触发内存保护，编译器及几个 Chrome 进程被结束；日志确认后即停止本机重型编译并转到 GitHub。Gproxy 当时没有重启。上文其他服务“未重启”及配置不变的严格比对针对最终切换阶段，不将这次早期环境事件隐瞒为全程完全无影响。
+
+## 后续兼容修正 · 10:29–10:32 CST
+
+用户报告配额守护连续三次 `HTTPStatusError` 后暂停。读取原生审计确认：主动 quota-diagnostics POST 在本地返回 403，而缓存 GET 正常。隔离复现得到 `forbidden: cross-origin request`：v4 明确收紧 Cookie 请求的同源检查，旧 Stream 客户端没有 Origin。此前验收覆盖了缓存读取，漏测了这个客户端主动 POST；这是本次升级的集成遗漏，不是账号额度耗尽。
+
+已给 Stream 私有管理 POST 补齐 HTTPX 规范化的同源头，保留 Gproxy 原生 CSRF；另补安全的 HTTP 状态 / 操作日志。只在实际运行中的 Stream 镜像上以纯 COPY 替换两个 Python 文件，没有纳入原目录其他未提交改动或重装依赖，也没有重新编译 Gproxy。修复差异和 before/after 哈希见 [_ops/dependent-clients](_ops/dependent-clients/README.md)。
+
+原生 Gproxy + 修复后的真实 Python 客户端 + 本地假 Antigravity 上游的完整请求验证通过：probe / reveal 200、四窗口及 inactive 保留、缺失 / 外国 Origin 仍拒绝；271 项离线回归和隔离 Nginx SSE / WebSocket 升级、回滚、排空测试通过，无付费推理验证或 GPU 请求。
+
+生产通过既有控制器滚动切到 green，blue 安全排空完成；固定入口、Gproxy、酒馆及账号池未重启，运行配置哈希不变。按用户明确授权，仅恢复此次因 403 暂停的 9、16、21；每个账号按原策略各完成一次正常微量生产请求（各 16 total tokens），均返回 200，随后新额度周期确认、失败计数清零。原有生成失败暂停的 15、26、27 没有解冻。回滚时保留最新共享 guard，不能恢复旧 state 快照而重复生成。
