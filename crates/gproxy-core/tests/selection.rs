@@ -219,24 +219,42 @@ async fn model_binding_never_widens_admission_and_unavailable_targets_fail_close
 
 #[tokio::test]
 async fn model_binding_does_not_retry_another_account_after_failure() {
-    let h = configured("round_robin", Some(false)).await;
-    bind_models(&h, json!({"gpt-x": ["b"]})).await;
-    h.script(vec![json_reply(
-        StatusCode::SERVICE_UNAVAILABLE,
-        json!({"error":"fixture"}),
-    )]);
-    let execution = h
-        .core
-        .stream_generate_content(h.context("retry", 3, None), request("{}"))
-        .await
-        .unwrap();
-    let (response, completion) = execution.into_parts();
-    assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
-    read(response.body).await;
-    completion.await.unwrap();
-    let calls = h.client.seen.lines();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].contains("auth=Bearer kb"));
+    use gproxy_core::CoreError;
+    for (status, expected_calls) in [
+        (StatusCode::SERVICE_UNAVAILABLE, 3),
+        (StatusCode::TOO_MANY_REQUESTS, 1),
+    ] {
+        let h = configured("round_robin", Some(false)).await;
+        bind_models(&h, json!({"gpt-x": ["b"]})).await;
+        // Preserve existing retry semantics: 503 is retried on the same
+        // credential until its failure threshold; 429 blocks immediately.
+        h.script(
+            (0..expected_calls)
+                .map(|_| json_reply(status, json!({"error":"fixture"})))
+                .collect(),
+        );
+        let execution = h
+            .core
+            .stream_generate_content(h.context("retry", 3, None), request("{}"))
+            .await
+            .unwrap();
+        let (response, completion) = execution.into_parts();
+        assert_eq!(response.status, status);
+        read(response.body).await;
+        completion.await.unwrap();
+        let calls = h.client.seen.lines();
+        assert_eq!(calls.len(), expected_calls);
+        assert!(calls.iter().all(|line| line.contains("auth=Bearer kb")));
+        // Once the sole bound credential is blocked, a fresh request also
+        // fails closed rather than escaping to the otherwise healthy a.
+        let error = h
+            .core
+            .stream_generate_content(h.context("blocked", 3, None), request("{}"))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CoreError::NoUsableCredential), "{error}");
+        assert_eq!(h.client.seen.lines().len(), expected_calls);
+    }
 }
 
 #[tokio::test]
