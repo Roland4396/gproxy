@@ -72,6 +72,7 @@ impl<C: gproxy_seaorm::BatchConnectionTrait> Core<C> {
     ) -> CoreResult<Selection> {
         let provider = &request.target.provider;
         let model = request.target.upstream_model.as_deref();
+        let model_credentials = model.and_then(|model| provider.model_credentials.get(model));
         let operation: Operation = request.operation.operation;
         // The first dead candidate, as it was when seen: the credential state
         // is shared and can revive while this awaits, so looking it up again
@@ -80,6 +81,7 @@ impl<C: gproxy_seaorm::BatchConnectionTrait> Core<C> {
         let mut candidates = Vec::with_capacity(request.target.credentials.len());
         for credential in &request.target.credentials {
             if excluded.contains(&credential.id)
+                || model_credentials.is_some_and(|ids| !ids.contains(&credential.id))
                 || credential.provider_id != provider.entity.id
                 || !credential.enabled
                 || credential.state.is_retired()

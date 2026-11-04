@@ -74,6 +74,10 @@ pub struct ProviderData {
     pub credential_strategy: CredentialStrategy,
     /// Independent affinity switch; legacy sticky strategies default to true.
     pub session_affinity: bool,
+    /// Exact upstream-model restrictions, intersected with the admitted pool
+    /// before affinity, retries and strategy selection. Missing/disabled targets
+    /// fail closed; models absent from this map keep the normal pool.
+    pub model_credentials: HashMap<String, std::collections::HashSet<String>>,
 }
 
 impl ProviderData {

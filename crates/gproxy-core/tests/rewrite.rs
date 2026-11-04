@@ -331,6 +331,7 @@ fn snapshot(rules: Vec<Arc<RewriteRuleData>>) -> (CoreData, ProviderData) {
         })],
         credential_strategy: CredentialStrategy::RoundRobin,
         session_affinity: false,
+        model_credentials: Default::default(),
     };
     (data, provider)
 }

@@ -111,6 +111,7 @@ fn context_for_channel(
         rewrite_rule_sets: vec![],
         credential_strategy: old.credential_strategy,
         session_affinity: false,
+        model_credentials: old.model_credentials.clone(),
     });
     ctx.target.upstream_model = Some("claude-fable-5".into());
     ctx.target.credentials = ctx

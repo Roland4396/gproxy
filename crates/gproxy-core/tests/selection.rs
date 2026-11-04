@@ -122,6 +122,123 @@ async fn run_context(h: &Harness, context: RequestContext) -> String {
     }
 }
 
+async fn bind_models(h: &Harness, bindings: serde_json::Value) {
+    let mut config = h.core.snapshot().providers["p"].entity.config.clone();
+    config["model_credentials"] = bindings;
+    h.core
+        .store()
+        .providers()
+        .update_many(vec![provider::ActiveModel {
+            id: Set("p".into()),
+            config: Set(config),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+    h.core
+        .store()
+        .settings()
+        .update(setting::ActiveModel {
+            config_revision: Set(h.core.snapshot().revision.0 as i64 + 1),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    h.core.reload_data().await.unwrap();
+}
+
+#[tokio::test]
+async fn model_binding_is_exact_and_unconfigured_models_keep_their_pool() {
+    let h = configured("round_robin", Some(false)).await;
+    bind_models(&h, json!({"gpt-x": ["b"]})).await;
+    for _ in 0..3 {
+        assert_eq!(run(&h, None, None).await, "b");
+    }
+    // Prefixes, aliases and requests without a model are not silently bound.
+    for model in [Some("gpt-x-high"), Some("different"), None] {
+        let mut context = (*h.context("other", 2, None)).clone();
+        context.target.upstream_model = model.map(str::to_owned);
+        assert_eq!(run_context(&h, context.clone()).await, "a");
+        assert_eq!(run_context(&h, context).await, "b");
+    }
+}
+
+#[tokio::test]
+async fn model_binding_overrides_an_old_affinity_pin_and_reset_preference() {
+    let h = configured("earliest_reset", Some(true)).await;
+    let time = now();
+    observe(&h, "a", &[("5h", Some(time + 300_000), 10)]).await;
+    observe(&h, "b", &[("5h", Some(time + 600_000), 10)]).await;
+    assert_eq!(run(&h, Some("same-session"), None).await, "a");
+    bind_models(&h, json!({"gpt-x": ["b"]})).await;
+    assert_eq!(run(&h, Some("same-session"), None).await, "b");
+}
+
+#[tokio::test]
+async fn model_binding_never_widens_admission_and_unavailable_targets_fail_closed() {
+    use gproxy_core::CoreError;
+    for mode in ["not-admitted", "disabled", "blocked", "missing", "empty"] {
+        let h = configured("round_robin", Some(true)).await;
+        let bindings = match mode {
+            "missing" => json!({"gpt-x": ["not-present"]}),
+            "empty" => json!({"gpt-x": []}),
+            _ => json!({"gpt-x": ["b"]}),
+        };
+        bind_models(&h, bindings).await;
+        if mode == "blocked" {
+            observe(&h, "b", &[("5h", Some(now() + 600_000), 0)]).await;
+        }
+        let mut context = (*h.context("denied", 3, Some("s"))).clone();
+        if mode == "not-admitted" {
+            context.target.credentials.retain(|c| c.id == "a");
+        }
+        if mode == "disabled" {
+            let bound = context
+                .target
+                .credentials
+                .iter_mut()
+                .find(|c| c.id == "b")
+                .unwrap();
+            Arc::get_mut(bound).unwrap().enabled = false;
+        }
+        let error = h
+            .core
+            .stream_generate_content(Arc::new(context), request("{}"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, CoreError::NoUsableCredential),
+            "{mode}: {error}"
+        );
+        assert!(
+            h.client.seen.lines().is_empty(),
+            "{mode}: no upstream call allowed"
+        );
+    }
+}
+
+#[tokio::test]
+async fn model_binding_does_not_retry_another_account_after_failure() {
+    let h = configured("round_robin", Some(false)).await;
+    bind_models(&h, json!({"gpt-x": ["b"]})).await;
+    h.script(vec![json_reply(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"error":"fixture"}),
+    )]);
+    let execution = h
+        .core
+        .stream_generate_content(h.context("retry", 3, None), request("{}"))
+        .await
+        .unwrap();
+    let (response, completion) = execution.into_parts();
+    assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
+    read(response.body).await;
+    completion.await.unwrap();
+    let calls = h.client.seen.lines();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].contains("auth=Bearer kb"));
+}
+
 #[tokio::test]
 async fn earliest_reset_compares_actual_times_across_windows_and_stays_in_allowed_pool() {
     let h = configured("earliest_reset", Some(false)).await;

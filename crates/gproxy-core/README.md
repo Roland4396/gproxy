@@ -86,6 +86,13 @@ and `round_robin_affinity` retain round-robin with affinity by default; an expli
 `session_affinity` overrides that default. Pins are scoped by caller and provider.
 See [session identity and selection](../../design/session-identity.md).
 
+Provider config `model_credentials` optionally maps exact upstream model IDs
+to credential-ID arrays, for example `{"model_credentials":{"model-x":["account-b"]}}`.
+Each list restricts (never expands) the caller's admitted candidates before
+affinity, agent-session assignment, quota ordering and retries. An empty list,
+missing credential, or unavailable bound credential fails closed without using
+another account. Models absent from the map keep their existing selection.
+
 Every channel exposes the provider config `forward_thinking` (default `true`).
 Set it to `false` to remove carried thinking/reasoning blocks and signatures from
 Claude, Responses (including WebSocket), Chat, and Gemini request history before
