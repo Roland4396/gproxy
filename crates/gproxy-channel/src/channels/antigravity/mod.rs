@@ -28,7 +28,9 @@
 //! body under `request` unchanged, so a `sessionId` the client sent arrives
 //! at `request.sessionId`, and a client that already sent a whole envelope
 //! keeps its own. The field is never renamed, moved or dropped; a request
-//! without one gets the id the editor would derive (below).
+//! without one gets the id the editor would derive (below). An opt-in
+//! `account_session_id` provider policy instead pins session identity to the
+//! selected, persisted credential row, overriding caller session ids too.
 //!
 //! Envelope fields: the editor's agent does not send the Gemini CLI's
 //! `user_prompt_id`. It names itself (`userAgent: "antigravity"`), the kind
@@ -103,6 +105,9 @@ const HIGH_REASONING_BUDGET: i64 = 10_001;
 pub struct AntigravityConfig {
     pub authorize_url: String,
     pub token_url: String,
+    /// Pin body/header session identity to the selected persisted account.
+    /// False preserves the upstream conversation/caller-based behavior.
+    pub account_session_id: bool,
     /// Static headers added to every Code Assist request.
     pub headers: std::collections::BTreeMap<String, String>,
 }
@@ -112,6 +117,7 @@ impl Default for AntigravityConfig {
         Self {
             authorize_url: DEFAULT_AUTHORIZE_URL.into(),
             token_url: DEFAULT_TOKEN_URL.into(),
+            account_session_id: false,
             headers: std::collections::BTreeMap::new(),
         }
     }
@@ -351,8 +357,12 @@ fn session_id(request: &Value) -> Result<String, ChannelError> {
 }
 
 /// The envelope fields the editor's agent sends in place of the Gemini
-/// CLI's; a value the client already put in the envelope is kept.
-fn agent_envelope(envelope: &mut Value, model: &str) -> Result<(), ChannelError> {
+/// CLI's; caller values survive unless account-session pinning is enabled.
+fn agent_envelope(
+    envelope: &mut Value,
+    model: &str,
+    account_session: Option<String>,
+) -> Result<(), ChannelError> {
     let Some(object) = envelope.as_object_mut() else {
         return Ok(());
     };
@@ -382,14 +392,18 @@ fn agent_envelope(envelope: &mut Value, model: &str) -> Result<(), ChannelError>
     let Some(request) = object.get_mut("request") else {
         return Ok(());
     };
-    let session = session_id(request)?;
+    let pinned = account_session.is_some();
+    let session = match account_session {
+        Some(session) => session,
+        None => session_id(request)?,
+    };
     if let Some(request) = request.as_object_mut() {
         request.remove("safetySettings");
         let named = request
             .get("sessionId")
             .and_then(Value::as_str)
             .is_some_and(|id| !id.trim().is_empty());
-        if !named {
+        if pinned || !named {
             request.insert("sessionId".into(), Value::from(session));
         }
     }
@@ -467,8 +481,17 @@ impl Antigravity {
                     claude::tidy_history(request);
                     claude::apply_limits(request, parsed.as_ref().and_then(claude::output_limit));
                 }
-                agent_envelope(&mut envelope, &model)?;
-                identity_session = envelope.pointer("/request/sessionId").and_then(Value::as_str).map(str::to_owned);
+                agent_envelope(
+                    &mut envelope,
+                    &model,
+                    config
+                        .account_session_id
+                        .then(|| identity::account_session_id(&ctx.credential)),
+                )?;
+                identity_session = envelope
+                    .pointer("/request/sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 (
                     code_assist::encode(&envelope, ChannelError::InvalidConfig)?,
                     operation == Operation::StreamGenerateContent,
@@ -501,7 +524,12 @@ impl Antigravity {
             token,
             matches!(operation, Operation::ListModels | Operation::GetModel),
         )?;
-        identity::apply(&mut headers, &ctx.credential, identity_session.as_deref())?;
+        identity::apply(
+            &mut headers,
+            &ctx.credential,
+            identity_session.as_deref(),
+            config.account_session_id,
+        )?;
         let mut builder = http::Request::builder().method(Method::POST).uri(uri);
         if let Some(map) = builder.headers_mut() {
             *map = headers;
@@ -588,6 +616,11 @@ impl BaseChannel for Antigravity {
                     "Google OAuth token endpoint used by the code exchange and by refresh.",
                 ).with_placeholder(DEFAULT_TOKEN_URL),
                 ConfigKey::optional(
+                    "account_session_id",
+                    ConfigKeyKind::Bool,
+                    "Pin sessionId and x-vscode-sessionid to the selected persisted account, including caller-supplied session ids. Stable across messages, models, token refresh and restarts; defaults to false.",
+                ),
+                ConfigKey::optional(
                     "headers",
                     ConfigKeyKind::HeaderList,
                     "Static headers added to every Code Assist request.",
@@ -670,7 +703,7 @@ pub(super) fn catalog_request(
     let token = access_token(credential)?;
     let mut headers = HeaderMap::new();
     apply_headers(&mut headers, config, token, true)?;
-    identity::apply(&mut headers, credential, None)?;
+    identity::apply(&mut headers, credential, None, config.account_session_id)?;
     Ok((
         format!(
             "{}{}",

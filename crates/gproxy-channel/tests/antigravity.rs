@@ -670,6 +670,152 @@ fn the_camel_case_session_id_antigravity_sends_survives_unrenamed() {
 }
 
 #[test]
+fn account_session_pinning_is_stable_across_content_models_refresh_and_callers() {
+    let config = json!({"account_session_id": true});
+    let secret = secret();
+    let metadata = Value::Null;
+    let original = credential(&secret, &metadata);
+    let envelope = |account, operation, model: &str, body| {
+        let prepared = prepare(
+            &config,
+            account,
+            operation,
+            request(
+                HeaderMap::new(),
+                &format!("/v1beta/models/{model}:generateContent"),
+                body,
+            ),
+        )
+        .expect("prepared");
+        (body_json(&prepared), prepared.headers().clone())
+    };
+    let (first, headers) = envelope(
+        original,
+        Operation::GenerateContent,
+        "gemini-3.8-flash-high",
+        json!({"contents":[{"role":"user","parts":[{"text":"first injected text"}]}]}),
+    );
+    // Golden value locks both the versioned identity input and legal wire format.
+    assert_eq!(first["request"]["sessionId"], "-1143852639897877915");
+    let session = first["request"]["sessionId"].as_str().unwrap();
+    let number: i64 = session.parse().expect("signed decimal session id");
+    assert!(number < 0 && number > i64::MIN);
+    let header = headers["x-vscode-sessionid"].to_str().unwrap();
+    assert_eq!(header.len(), 36);
+    assert_eq!(&header[14..15], "4");
+    assert!(matches!(&header[19..20], "8" | "9" | "a" | "b"));
+    for body in [
+        json!({"contents":[{"role":"user","parts":[{"text":"a different chat"}]}],"sessionId":"caller-session"}),
+        json!({"request":{"contents":[],"sessionId":"another-caller-session"}}),
+        json!({"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}]}),
+        json!({"contents":[]}),
+    ] {
+        for model in [
+            "gemini-4-argon-high",
+            "gemini-3.8-flash-high",
+            "gemini-3.1-flash-image",
+        ] {
+            for operation in [Operation::GenerateContent, Operation::StreamGenerateContent] {
+                let (next, next_headers) = envelope(original, operation, model, body.clone());
+                assert_eq!(next["request"]["sessionId"], session);
+                assert_eq!(
+                    next_headers["x-vscode-sessionid"],
+                    headers["x-vscode-sessionid"]
+                );
+                assert_ne!(next["requestId"], first["requestId"]);
+            }
+        }
+    }
+    let refreshed = json!({"access_token":"ya29.new-token","refresh_token":"new-refresh",
+        "provider_fields":{"project_id":"new-project","user_email":"new-fact@example.test"}});
+    let changed_metadata =
+        json!({"project_id":"metadata-project","user_email":"metadata@example.test"});
+    let (after_refresh, refresh_headers) = envelope(
+        CredentialView {
+            secret: &refreshed,
+            metadata: &changed_metadata,
+            version: 99,
+            expires_at_ms: Some(i64::MAX),
+            ..original
+        },
+        Operation::GenerateContent,
+        "gemini-4-argon-high",
+        json!({"contents":[]}),
+    );
+    assert_eq!(after_refresh["request"]["sessionId"], session);
+    assert_eq!(
+        refresh_headers["x-vscode-sessionid"],
+        headers["x-vscode-sessionid"]
+    );
+    // Catalogue/header-only preparation uses the same stable account session.
+    let listing = prepare(
+        &config,
+        original,
+        Operation::ListModels,
+        request(HeaderMap::new(), "/v1beta/models", json!({})),
+    )
+    .unwrap();
+    assert_eq!(
+        listing.headers()["x-vscode-sessionid"],
+        headers["x-vscode-sessionid"]
+    );
+}
+
+#[test]
+fn account_session_pinning_isolates_pool_rows_and_providers_without_email() {
+    let config = json!({"account_session_id": true});
+    let secret = secret();
+    let metadata = Value::Null;
+    let original = credential(&secret, &metadata);
+    let make = |account| {
+        let prepared = prepare(
+            &config,
+            account,
+            Operation::GenerateContent,
+            request(
+                HeaderMap::new(),
+                "/v1beta/models/m:generateContent",
+                json!({"contents":[]}),
+            ),
+        )
+        .unwrap();
+        (
+            body_json(&prepared)["request"]["sessionId"].clone(),
+            prepared.headers()["x-vscode-sessionid"].clone(),
+        )
+    };
+    let first = make(original);
+    assert_ne!(
+        first,
+        make(CredentialView {
+            id: "other-account",
+            ..original
+        })
+    );
+    assert_ne!(
+        first,
+        make(CredentialView {
+            provider_id: "other-provider",
+            ..original
+        })
+    );
+    assert_eq!(first, make(credential(&secret, &metadata)));
+    // Length-framing prevents ambiguous provider/account delimiters.
+    assert_ne!(
+        make(CredentialView {
+            provider_id: "a:b",
+            id: "c",
+            ..original
+        }),
+        make(CredentialView {
+            provider_id: "a",
+            id: "b:c",
+            ..original
+        })
+    );
+}
+
+#[test]
 fn a_credential_without_a_project_or_a_token_is_invalid() {
     let config = json!({});
     let metadata = Value::Null;

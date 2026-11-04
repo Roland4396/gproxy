@@ -195,6 +195,19 @@ Stop v3, back up the database, master key, and startup configuration, then start
 
 See [Migrating v3 to v4](https://gproxy.leenhawk.com/deployment/v3-to-v4/) for migration scope, backups, and failure handling.
 
+### Account-pinned Antigravity sessions (local)
+
+Set `account_session_id: true` in an Antigravity provider's config to pin the
+native `request.sessionId` and `x-vscode-sessionid` to the selected persisted
+credential row. Body ids keep the captured negative signed-63-bit decimal
+grammar; header ids keep the UUID grammar. Both remain deterministic across
+messages, models, retries, token/project refresh, account switching and process
+restarts. Caller-provided session ids are overridden in this mode. The default
+is `false`, preserving upstream conversation-based behavior and explicit ids.
+Request ids remain independent. No tokens or mutable account facts enter the
+session seed, and no database migration is required. Preserve the provider and
+credential row ids when restoring/importing data to preserve these session ids.
+
 ## Headless CLI for CI
 
 The Release workflow builds headless ZIP packages independently of the frontend:

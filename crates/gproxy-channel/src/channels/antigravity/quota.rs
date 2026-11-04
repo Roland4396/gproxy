@@ -290,7 +290,11 @@ pub(super) fn summary_entries(body: &[u8], catalogue: Option<&[u8]>) -> Vec<Quot
         let reset = code_assist::text(bucket, "resetTime").and_then(iso_to_ms);
         entries.push(code_assist::quota::window(
             id.to_owned(),
-            Some(if disabled { "antigravity_disabled".to_owned() } else { label(family, span) }),
+            Some(if disabled {
+                "antigravity_disabled".to_owned()
+            } else {
+                label(family, span)
+            }),
             catalogue
                 .as_ref()
                 .map_or(QuotaScope::Unknown, |catalogue| catalogue.scope(family)),
@@ -336,7 +340,12 @@ impl QuotaQuery for Antigravity {
                 let token = super::access_token(&context.credential)?;
                 let mut headers = HeaderMap::new();
                 apply_headers(&mut headers, &config, token, true)?;
-                super::identity::apply(&mut headers, &context.credential, None)?;
+                super::identity::apply(
+                    &mut headers,
+                    &context.credential,
+                    None,
+                    config.account_session_id,
+                )?;
                 let (status, _, summary) = code_assist::send(
                     context.client,
                     Method::POST,

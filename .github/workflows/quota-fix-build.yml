@@ -104,6 +104,14 @@ jobs:
             '{commit:$commit,image:$image,version:$version}' > artifact/build-info.json
           cd artifact
           sha256sum gproxy gproxy-upgrade-image.tar.gz image-id.txt build-info.json > SHA256SUMS
+      - name: Account-session wire and restart regression (network-none fake upstream)
+        run: |
+          sudo python3 _ops/account_session_canary.py \
+            --image "gproxy-local:upgrade-v4-${GITHUB_SHA::12}" \
+            --work /tmp/gproxy-account-session-canary
+          sudo cp /tmp/gproxy-account-session-canary/result.json artifact/account-session-canary.json
+          sudo cp /tmp/gproxy-account-session-canary/cleanup.json artifact/account-session-cleanup.json
+          sudo chmod 644 artifact/account-session-*.json
       - uses: actions/upload-artifact@v7
         with:
           name: gproxy-upgrade-v4-linux-amd64
