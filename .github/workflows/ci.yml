@@ -1,10 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches-ignore:
-      - fix/antigravity-quota-refresh
-  pull_request:
+  workflow_dispatch: null
 
 concurrency:
   group: ci-${{ github.ref }}
