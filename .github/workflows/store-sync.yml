@@ -1,8 +1,6 @@
 name: Sync Microsoft Store signed MSIX
 
 on:
-  schedule:
-    - cron: '23 3 * * *'
   workflow_dispatch:
     inputs:
       dry_run:

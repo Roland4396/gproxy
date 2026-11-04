@@ -1,9 +1,7 @@
 name: Upgrade v4 · Linux image
 
 on:
-  push:
-    branches: [feat/upgrade-v4-preserve-local-20261008]
-  workflow_dispatch:
+  workflow_dispatch: null
 
 permissions:
   contents: read

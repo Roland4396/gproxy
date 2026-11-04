@@ -1,8 +1,7 @@
 name: OHOS startup probe
 on:
-  workflow_dispatch:
-  push:
-    branches: [fix/ohos-startup]
+  workflow_dispatch: null
+
 permissions:
   contents: read
 concurrency:
