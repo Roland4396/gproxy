@@ -1,9 +1,7 @@
 name: Custom Linux image
 
 on:
-  push:
-    branches: [fix/antigravity-quota-refresh]
-  workflow_dispatch:
+  workflow_dispatch: null
 
 permissions:
   contents: read
