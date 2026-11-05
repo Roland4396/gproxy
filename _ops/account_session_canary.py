@@ -34,6 +34,10 @@ class Mock(BaseHTTPRequestHandler):
   assert parsed.version==4 and str(parsed)==header
   row={'account':account,'sessionId':session,'headerSessionId':header,
    'requestId':body['requestId'],'model':body['model'],'stream':'alt=sse' in self.path}
+  labels=request['labels'];row.update(cascadeId=labels['cascade_id'],trajectoryId=labels['trajectory_id'])
+  assert str(uuid.UUID(row['cascadeId']))==row['cascadeId']
+  assert str(uuid.UUID(row['trajectoryId']))==row['trajectoryId']
+  assert labels['root_cascade_id']==row['cascadeId']
   observed.append(row)
   if fail_once:
    fail_once=False;row['status']=503
@@ -43,7 +47,7 @@ class Mock(BaseHTTPRequestHandler):
   def response(text,finish=False):
    candidate={'content':{'role':'model','parts':[{'text':text}]}}
    if finish:candidate['finishReason']='STOP'
-   return {'response':{'candidates':[candidate],'usageMetadata':{'promptTokenCount':1,'candidatesTokenCount':1,'totalTokenCount':2}}}
+   return {'response':{'modelVersion':'gemini-3.8-flash-n','candidates':[candidate],'usageMetadata':{'promptTokenCount':1,'candidatesTokenCount':1,'totalTokenCount':2}}}
   self.send_response(200)
   if row['stream']:
    self.send_header('Content-Type','text/event-stream');self.send_header('Connection','close');self.end_headers()
@@ -115,8 +119,12 @@ for account,cid in [('a',a),('b',b)]:
  rows=[r for r in observed if r['account']==account]
  assert rows and {r['sessionId'] for r in rows}=={expected(cid)}
  assert len({r['headerSessionId'] for r in rows})==1
+ assert len({r['cascadeId'] for r in rows})==1
+ assert len({r['trajectoryId'] for r in rows})==1
 assert len({r['sessionId'] for r in observed})==2
 assert len({r['headerSessionId'] for r in observed})==2
+assert len({r['cascadeId'] for r in observed})==2
+assert len({r['trajectoryId'] for r in observed})==2
 assert len({r['requestId'] for r in observed})==len(observed)
 server.shutdown();server.server_close()
 print(json.dumps({'observed':observed,'stream_unbuffered':True}))
@@ -157,7 +165,7 @@ def main():
         for account in ['a', 'b']:
             before = next(r for r in phases[0]['observed'] if r['account']==account)
             after = next(r for r in phases[1]['observed'] if r['account']==account)
-            for key in ['sessionId','headerSessionId']:
+            for key in ['sessionId','headerSessionId','cascadeId','trajectoryId']:
                 assert before[key] == after[key], (account,key)
         rows = [r for phase in phases for r in phase['observed']]
         assert len({r['requestId'] for r in rows}) == len(rows)

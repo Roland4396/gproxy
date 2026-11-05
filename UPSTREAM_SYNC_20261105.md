@@ -9,7 +9,7 @@ Status: implementation and validation in progress; not deployed.
 
 | Local contract | Integration decision | Required evidence |
 |---|---|---|
-| Selected-account native and header session ids | Preserve the exact versioned row-identity seed and output encodings. Add the policy to the new hub envelope; do not adopt the upstream shared constant when account pinning is enabled. | Golden id; content/model/token/project changes, account switching and process restart wire regression. |
+| Selected-account native and header session ids | Preserve the exact versioned row-identity seed and output encodings. Add the policy to the new hub envelope; do not adopt the upstream shared constant when account pinning is enabled. | Golden id; content/model/token/project changes, account switching and process restart wire regression. Newly introduced hub cascade/trajectory labels use the same account policy; their request timestamp remains unique for identical calls. |
 | Account/device runtime identity headers | Preserve local identity headers while updating reported client version to the new hub; retain the device-id derivation. | Header ownership, identity isolation and no plaintext identity on wire tests. |
 | Updated IDE/hub protocol | Adopt upstream IDE 2.6.0 / hub 2.28.1 (CLI 1.4.10), OAuth/discovery, connection profile and request labels together. | Native channel tests; synthetic installed-image generation and SSE. |
 | Exact model-account restrictions | Keep model_credentials intersected before selection, affinity, retry and probing; unavailable bound accounts fail closed. No cooldown probe may bypass an explicit model binding. | Missing/disabled/blocked/not-admitted/empty bindings, affinity and failure regressions. |

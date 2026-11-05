@@ -691,7 +691,8 @@ fn account_session_pinning_is_stable_across_content_models_refresh_and_callers()
     assert!(matches!(&header[19..20], "8" | "9" | "a" | "b"));
     for body in [
         json!({"contents":[{"role":"user","parts":[{"text":"a different chat"}]}],"sessionId":"caller-session"}),
-        json!({"request":{"contents":[],"sessionId":"another-caller-session"}}),
+        json!({"request":{"contents":[],"sessionId":"another-caller-session", "labels":{
+            "cascade_id":"untrusted", "root_cascade_id":"untrusted", "trajectory_id":"untrusted", "user_label":"keep"}}}),
         json!({"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}]}),
         json!({"contents":[]}),
     ] {
@@ -703,6 +704,12 @@ fn account_session_pinning_is_stable_across_content_models_refresh_and_callers()
             for operation in [Operation::GenerateContent, Operation::StreamGenerateContent] {
                 let (next, next_headers) = envelope(original, operation, model, body.clone());
                 assert_eq!(next["request"]["sessionId"], session);
+                for field in ["cascade_id", "trajectory_id", "root_cascade_id"] {
+                    assert_eq!(
+                        next["request"]["labels"][field],
+                        first["request"]["labels"][field]
+                    );
+                }
                 assert_eq!(
                     next_headers["x-vscode-sessionid"],
                     headers["x-vscode-sessionid"]
@@ -729,6 +736,10 @@ fn account_session_pinning_is_stable_across_content_models_refresh_and_callers()
     );
     assert_eq!(after_refresh["request"]["sessionId"], session);
     assert_eq!(
+        after_refresh["request"]["labels"]["cascade_id"],
+        first["request"]["labels"]["cascade_id"]
+    );
+    assert_eq!(
         refresh_headers["x-vscode-sessionid"],
         headers["x-vscode-sessionid"]
     );
@@ -744,6 +755,40 @@ fn account_session_pinning_is_stable_across_content_models_refresh_and_callers()
         listing.headers()["x-vscode-sessionid"],
         headers["x-vscode-sessionid"]
     );
+}
+
+#[test]
+fn account_pinned_hub_request_ids_remain_unique_for_identical_calls() {
+    let config = json!({"account_session_id":true});
+    let secret = secret();
+    let metadata = Value::Null;
+    let mut ids = std::collections::HashSet::new();
+    let mut cascade = None;
+    for _ in 0..100 {
+        let prepared = prepare(
+            &config,
+            credential(&secret, &metadata),
+            Operation::GenerateContent,
+            request(
+                HeaderMap::new(),
+                "/v1beta/models/gemini-4-argon-high:generateContent",
+                json!({"contents":[{"role":"user","parts":[{"text":"same"}]}]}),
+            ),
+        )
+        .unwrap();
+        let body = body_json(&prepared);
+        assert!(ids.insert(body["requestId"].as_str().unwrap().to_owned()));
+        let parts: Vec<_> = body["requestId"].as_str().unwrap().split('/').collect();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[0], "agent");
+        assert!(parts[2].parse::<i64>().unwrap() > 0);
+        let value = body["request"]["labels"]["cascade_id"].clone();
+        if let Some(expected) = &cascade {
+            assert_eq!(&value, expected);
+        } else {
+            cascade = Some(value);
+        }
+    }
 }
 
 #[test]

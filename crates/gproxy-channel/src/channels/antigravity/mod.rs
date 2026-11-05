@@ -395,17 +395,26 @@ fn format_uuid(mut bytes: [u8; 16]) -> String {
 /// The cascade and trajectory ids of a conversation: UUIDs from the SHA-256
 /// of the first user text, so every turn of a conversation shares them;
 /// random when the conversation opens without text.
-fn conversation_ids(request: &Value) -> Result<(String, String), ChannelError> {
+fn conversation_ids(
+    request: &Value,
+    account_session: Option<&str>,
+) -> Result<(String, String), ChannelError> {
     use sha2::Digest as _;
-    let first = request
-        .get("contents")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|content| content.get("role").and_then(Value::as_str) == Some("user"))
-        .and_then(|content| content.pointer("/parts/0/text"))
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty());
+    // Rewritten first-user text is not a stable account identity. Under the
+    // existing account policy, keep the new hub's related ids on that same
+    // account, without modifying any message or generation parameter.
+    let account_seed = account_session.map(|id| format!("antigravity-account-labels-v1:{id}"));
+    let first = account_seed.as_deref().or_else(|| {
+        request
+            .get("contents")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|content| content.get("role").and_then(Value::as_str) == Some("user"))
+            .and_then(|content| content.pointer("/parts/0/text"))
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+    });
     let Some(text) = first else {
         return Ok((uuid()?, uuid()?));
     };
@@ -461,8 +470,9 @@ fn agent_labels(
     request: &Value,
     model: &str,
     ms: i64,
+    account_session: Option<&str>,
 ) -> Result<(String, serde_json::Map<String, Value>), ChannelError> {
-    let (cascade, trajectory) = conversation_ids(request)?;
+    let (cascade, trajectory) = conversation_ids(request, account_session)?;
     let contents = request
         .get("contents")
         .and_then(Value::as_array)
@@ -529,12 +539,26 @@ fn agent_envelope(
         .filter(|kind| !kind.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| if image { "image_gen" } else { "agent" }.to_owned());
-    let ms = code_assist::unix_now_ms();
+    let ms = if account_session.is_some() {
+        // Keep the captured timestamp grammar while preventing identical
+        // account/model/step calls in one millisecond from reusing requestId.
+        use std::sync::atomic::{AtomicI64, Ordering};
+        static LAST_REQUEST_MS: AtomicI64 = AtomicI64::new(0);
+        let now = code_assist::unix_now_ms();
+        let previous = LAST_REQUEST_MS
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+                Some(now.max(last.saturating_add(1)))
+            })
+            .expect("always updated");
+        now.max(previous.saturating_add(1))
+    } else {
+        code_assist::unix_now_ms()
+    };
     let (request_id, labels) = match kind.as_str() {
         "image_gen" => (format!("image_gen/{ms}/{}/12", uuid()?), None),
         "agent" => {
             let request = object.get("request").unwrap_or(&Value::Null);
-            let (id, labels) = agent_labels(request, model, ms)?;
+            let (id, labels) = agent_labels(request, model, ms, account_session.as_deref())?;
             (id, Some(labels))
         }
         other => (format!("{other}/{}", uuid()?), None),
@@ -553,7 +577,27 @@ fn agent_envelope(
     };
     request.remove("safetySettings");
     if let Some(labels) = labels {
-        request.entry("labels").or_insert(Value::Object(labels));
+        if account_session.is_some() {
+            let existing = request
+                .entry("labels")
+                .or_insert_with(|| Value::Object(Default::default()));
+            if let Some(existing) = existing.as_object_mut() {
+                for (key, value) in labels {
+                    if matches!(
+                        key.as_str(),
+                        "cascade_id" | "root_cascade_id" | "trajectory_id" | "request_id"
+                    ) {
+                        existing.insert(key, value);
+                    } else {
+                        existing.entry(key).or_insert(value);
+                    }
+                }
+            } else {
+                *existing = Value::Object(labels);
+            }
+        } else {
+            request.entry("labels").or_insert(Value::Object(labels));
+        }
     }
     let named = request
         .get("sessionId")
