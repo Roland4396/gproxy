@@ -1330,7 +1330,11 @@ mod tests {
         assert_eq!(tiers[0].output_per_million.as_deref(), Some("0"));
         assert_eq!(tiers[0].cache_read_per_million.as_deref(), Some("0.6"));
         assert_eq!(
-            tiers[0].cache_creation_30m_per_million.as_deref(),
+            tiers[0]
+                .cache_creation_per_million
+                .iter()
+                .find(|entry| entry.ttl_seconds.is_none())
+                .map(|entry| entry.price.as_str()),
             Some("7.5")
         );
         assert_eq!(tiers[1].multiplier.as_deref(), Some("0.5"));
