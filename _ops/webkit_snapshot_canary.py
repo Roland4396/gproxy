@@ -95,6 +95,12 @@ try{
    if(await trigger.isVisible()){await activate(trigger);await page.getByRole('dialog').waitFor();await page.waitForTimeout(350);}
    const visible=page.locator('a[href="'+href+'"]:visible').first();
    if(!await visible.count()){
+    // Current upstream starts administrators on their Personal surface. Switch
+    // using the visible Admin tab before looking for management links.
+    const admin=page.getByRole('tab',{name:'Admin',exact:true});
+    if(await admin.isVisible()){await activate(admin);await page.waitForTimeout(250);}
+   }
+   if(!await visible.count()){
     const summary=page.locator('nav details:has(a[href="'+href+'"]):visible > summary').first();
     await summary.click();
    }
@@ -292,6 +298,15 @@ def main():
             log.chmod(0o600)
             run(["docker", "stop", "--time", "15", name])
             run(["docker", "rm", name])
+        # This helper owns only its temporary clone and canary master-key file.
+        # The caller's login selector file is deliberately not removed here.
+        shutil.rmtree(data, ignore_errors=True)
+        env.unlink(missing_ok=True)
+        (args.work / "cleanup.json").write_text(json.dumps({
+            "container_removed": subprocess.run(["docker", "inspect", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0,
+            "temporary_master_key_deleted": not env.exists(),
+            "runtime_clone_deleted": not data.exists(),
+        }) + "\n")
 
 
 if __name__ == "__main__":
