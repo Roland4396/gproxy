@@ -14,7 +14,7 @@ import uuid
 
 
 SCRIPT = r'''
-import hashlib,json,threading,time,urllib.request,uuid
+import hashlib,json,threading,time,urllib.request,urllib.error,uuid
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 observed=[]
 fail_once=False
@@ -108,8 +108,14 @@ if BOOTSTRAP:
  api('/admin/api/credentials/'+a,{'secret':secret('synthetic-a-refreshed','different-discovered-project')},'PATCH')
  generate('gemini-4-argon-high','synthetic after refresh')
  fail_once=True;before=len(observed)
+ try:
+  generate('gemini-3.8-flash-high','synthetic retry')
+  raise AssertionError('503 should be returned without hitting the same account again in one request')
+ except urllib.error.HTTPError as error:
+  assert error.code==503;error.read()
+ assert len(observed)==before+1 and observed[-1]['status']==503
  generate('gemini-3.8-flash-high','synthetic retry')
- assert len(observed)==before+2 and observed[-2]['status']==503 and observed[-1]['status']==200
+ assert len(observed)==before+2 and observed[-1]['status']==200
 generate('gemini-3.8-flash-high','synthetic return to account a')
 def expected(cid):
  seed=f'antigravity-account-session-v1:{len(provider)}:{provider}:{len(cid)}:{cid}'

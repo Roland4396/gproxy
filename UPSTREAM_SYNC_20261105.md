@@ -28,3 +28,5 @@ selection and a genuine round-robin-affinity pin.
 
 Do not mark this update complete until all acceptance gates pass. Preserve the old
 image, complete database and configuration for rollback across schema migrations.
+
+Native rejection update: a credential that refused a request is no longer hit again within that same request. The existing three-failure cooldown threshold remains across separate requests; a bound model still never escapes to another account. Regressions and the installed-image fixture check this behavior explicitly rather than restoring redundant retry traffic.

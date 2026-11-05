@@ -214,25 +214,25 @@ async fn model_binding_does_not_retry_another_account_after_failure() {
     ] {
         let h = configured("round_robin").await;
         bind_models(&h, json!({"gpt-x": ["b"]})).await;
-        // Preserve existing retry semantics: 503 is retried on the same
-        // credential until its failure threshold; 429 blocks immediately.
-        h.script(
-            (0..expected_calls)
-                .map(|_| json_reply(status, json!({"error":"fixture"})))
-                .collect(),
-        );
-        let execution = h
-            .core
-            .stream_generate_content(h.context("retry", 3, None), request("{}"))
-            .await
-            .unwrap();
-        let (response, completion) = execution.into_parts();
-        assert_eq!(response.status, status);
-        read(response.body).await;
-        completion.await.unwrap();
-        let calls = h.client.seen.lines();
-        assert_eq!(calls.len(), expected_calls);
-        assert!(calls.iter().all(|line| line.contains("auth=Bearer kb")));
+        // Upstream now excludes a refusing credential for the remainder of
+        // one request. Three separately issued 503 requests still reach the
+        // retained failure threshold; 429 blocks on the first request.
+        for index in 0..expected_calls {
+            h.script(vec![json_reply(status, json!({"error":"fixture"}))]);
+            let request_id = format!("retry-{index}");
+            let execution = h
+                .core
+                .stream_generate_content(h.context(&request_id, 3, None), request("{}"))
+                .await
+                .unwrap();
+            let (response, completion) = execution.into_parts();
+            assert_eq!(response.status, status);
+            read(response.body).await;
+            completion.await.unwrap();
+            let calls = h.client.seen.lines();
+            assert_eq!(calls.len(), index + 1);
+            assert!(calls.iter().all(|line| line.contains("auth=Bearer kb")));
+        }
         // Once the sole bound credential is blocked, a fresh request also
         // fails closed rather than escaping to the otherwise healthy a.
         let error = h
