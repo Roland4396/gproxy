@@ -130,8 +130,11 @@ impl BaseChannel for Overrides {
     http_overrides! {
         list_models => ListModels, get_model => GetModel, count_tokens => CountTokens,
         generate_content => GenerateContent, stream_generate_content => StreamGenerateContent,
-        guardian_review => GuardianReview, guardian_classify => GuardianClassify,
+        retrieve_interaction => RetrieveInteraction,
+        cancel_interaction => CancelInteraction,
+        delete_interaction => DeleteInteraction,
         create_moderation => CreateModeration,
+        create_decision => CreateDecision,
         compact_content => CompactContent, summarize_memory => SummarizeMemory,
         create_conversation => CreateConversation, create_embedding => CreateEmbedding,
         batch_create_embedding => BatchCreateEmbedding, rerank => Rerank, web_search => WebSearch,
@@ -141,10 +144,15 @@ impl BaseChannel for Overrides {
         retrieve_file_content => RetrieveFileContent, delete_file => DeleteFile,
         create_video => CreateVideo, retrieve_video => RetrieveVideo, list_videos => ListVideos,
         delete_video => DeleteVideo, download_video_content => DownloadVideoContent,
+        create_voice => CreateVoice,
+        create_realtime_client_secret => CreateRealtimeClientSecret,
+        hangup_realtime_call => HangupRealtimeCall,
+        create_live_session => CreateLiveSession,
+        hangup_live_session => HangupLiveSession,
         create_realtime_call => CreateRealtimeCall,
     }
     ws_overrides! {
-        connect_realtime => ConnectRealtime, generate_content_websocket => GenerateContent,
+        connect_live => ConnectLive, connect_realtime => ConnectRealtime, generate_content_websocket => GenerateContent,
         stream_generate_content_websocket => StreamGenerateContent,
     }
 }
@@ -388,10 +396,10 @@ async fn websocket_preserves_duplex_frames_rejected_bodies_and_assigned_auth() {
                 }
             }
         }
-        assert_eq!(*client.auth.lock().unwrap(), ["selected"; 4]);
+        assert_eq!(*client.auth.lock().unwrap(), ["selected"; 5]);
         assert_eq!(
             client.sent.lock().unwrap().len(),
-            if rejected { 0 } else { 4 }
+            if rejected { 0 } else { 5 }
         );
     }
 }

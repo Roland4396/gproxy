@@ -17,10 +17,11 @@ use futures_util::StreamExt;
 use gproxy_channel::{
     BaseChannel, ChannelError, OutboundClient,
     channel::{
-        AcquiredCredential, AuthorizationCode, AuthorizationRequest, AuthorizationStart,
-        CookieLogin, CredentialContext, CredentialRefresh, CredentialUpdate, CredentialView,
-        DeviceAuthorization, DevicePoll, LoginContext, OAuthAuthorizationCode, OAuthCredential,
-        OAuthDeviceCode, OperationFuture, PrepareContext, ProviderView, QuotaQuery, QuotaSnapshot,
+        AuthorizationCode, AuthorizationRequest, AuthorizationStart, ChannelCapabilities,
+        ChannelDescriptor, CredentialContext, CredentialRefresh, CredentialUpdate, CredentialView,
+        DeviceAuthorization, DevicePoll, LoginContext, LoginMode, OAuthAuthorizationCode,
+        OAuthCredential, OAuthDeviceCode, OperationFuture, PrepareContext, ProviderView,
+        QuotaQuery, QuotaSnapshot,
     },
 };
 use gproxy_protocol::{
@@ -70,7 +71,6 @@ pub struct TestChannel {
     pub exchanged_provider_state: Mutex<Vec<BTreeMap<String, Value>>>,
     pub device_authorizations: Mutex<VecDeque<DeviceAuthorization>>,
     pub device_polls: Mutex<VecDeque<DevicePoll>>,
-    pub cookie_exchanges: Mutex<VecDeque<Result<AcquiredCredential, &'static str>>>,
     /// What each login step was given, in order.
     pub login_calls: Arc<Log>,
 }
@@ -82,6 +82,27 @@ impl BaseChannel for TestChannel {
 
     fn id(&self) -> &'static str {
         "test"
+    }
+    fn descriptor(&self) -> ChannelDescriptor {
+        ChannelDescriptor {
+            id: self.id(),
+            display_name: self.id(),
+            // The scripted bearer accepts manual API keys as well as login results.
+            credential_kinds: vec!["api_key", "oauth", "cookie"],
+            login_modes: vec![
+                LoginMode::ApiKey,
+                LoginMode::AuthorizationCode,
+                LoginMode::DeviceCode,
+            ],
+            capabilities: ChannelCapabilities {
+                refresh: self.credential_refresh().is_some(),
+                quota_query: self.quota_query().is_some(),
+                quota_reset: self.quota_reset().is_some(),
+                services: self.services().is_some(),
+                ..Default::default()
+            },
+            config_keys: Vec::new(),
+        }
     }
     fn credential_refresh(&self) -> Option<&dyn CredentialRefresh> {
         Some(self)
@@ -95,9 +116,7 @@ impl BaseChannel for TestChannel {
     fn oauth_device_code(&self) -> Option<&dyn OAuthDeviceCode> {
         Some(self)
     }
-    fn cookie_login(&self) -> Option<&dyn CookieLogin> {
-        Some(self)
-    }
+
     /// `{"dialects": ["claude", …]}` on the provider, or everything.
     fn native_dialects(&self, provider: ProviderView<'_>, _: Operation) -> Vec<Dialect> {
         let configured: Vec<Dialect> = provider
@@ -121,9 +140,14 @@ impl BaseChannel for TestChannel {
         let url = match ctx.endpoint_override {
             Some(url) => url.to_owned(),
             None => format!(
-                "{}{}",
+                "{}{}{}",
                 ctx.provider.base_url.unwrap_or_default(),
-                ctx.request.path
+                ctx.request.path,
+                ctx.request
+                    .query
+                    .as_deref()
+                    .map(|query| format!("?{query}"))
+                    .unwrap_or_default()
             ),
         };
         let mut builder = http::Request::builder()
@@ -230,23 +254,6 @@ impl OAuthDeviceCode for TestChannel {
     }
 }
 
-impl CookieLogin for TestChannel {
-    fn exchange_cookie<'a>(
-        &'a self,
-        _: LoginContext<'a>,
-        cookie: &'a str,
-    ) -> OperationFuture<'a, AcquiredCredential> {
-        self.login_calls.push(format!("cookie {cookie}"));
-        let reply = self
-            .cookie_exchanges
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("scripted cookie exchange");
-        Box::pin(async move { reply.map_err(|reason| ChannelError::InvalidConfig(reason.into())) })
-    }
-}
-
 impl CredentialRefresh for TestChannel {
     fn refresh<'a>(
         &'a self,
@@ -268,6 +275,7 @@ impl CredentialRefresh for TestChannel {
                     api_key,
                     expires_at_ms,
                 } => Ok(CredentialUpdate {
+                    metadata: None,
                     secret: json!({ "api_key": api_key }),
                     expires_at_ms,
                 }),

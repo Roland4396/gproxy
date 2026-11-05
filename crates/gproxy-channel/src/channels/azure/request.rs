@@ -8,13 +8,12 @@ use crate::channel::{
     BaseChannel, ChannelCapabilities, ChannelDescriptor, ChannelError, ConfigKey, ConfigKeyKind,
     HOST_CONFIG_KEYS, HeaderAllowlist, LoginMode, PrepareContext, ProviderView, forwardable,
 };
-use crate::channels::shared::cache;
+use crate::channels::shared::{cache, claude_images};
 use gproxy_protocol::{Dialect, HttpBody, Operation, WireFamily};
 use http::{HeaderName, HeaderValue};
 
 /// Azure's Anthropic surface expects the same version header as Anthropic's.
-const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
-
+const DEFAULT_ANTHROPIC_VERSION: &str = gproxy_protocol::claude::API_VERSION;
 
 impl BaseChannel for Azure {
     fn claude_fallback(&self) -> Option<crate::channel::ClaudeFallback> {
@@ -28,10 +27,25 @@ impl BaseChannel for Azure {
         ID
     }
 
+    fn validate_credential_secret(&self, secret: &serde_json::Value) -> Result<(), ChannelError> {
+        if secret
+            .get("api_key")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|key| !key.trim().is_empty())
+        {
+            Ok(())
+        } else {
+            Err(ChannelError::InvalidConfig(
+                "credential requires a nonempty `api_key`".into(),
+            ))
+        }
+    }
+
     fn descriptor(&self) -> ChannelDescriptor {
         ChannelDescriptor {
             id: ID,
             display_name: "Microsoft Azure",
+            credential_kinds: vec!["api_key"],
             login_modes: vec![LoginMode::ApiKey],
             capabilities: ChannelCapabilities::default(),
             config_keys: [
@@ -141,9 +155,10 @@ impl BaseChannel for Azure {
                     HeaderName::from_static("x-api-key"),
                     HeaderValue::from_str(key).map_err(|_| ChannelError::InvalidCredential)?,
                 );
-                headers
-                    .entry(HeaderName::from_static("anthropic-version"))
-                    .or_insert_with(|| HeaderValue::from_static(DEFAULT_ANTHROPIC_VERSION));
+                headers.insert(
+                    HeaderName::from_static("anthropic-version"),
+                    HeaderValue::from_static(DEFAULT_ANTHROPIC_VERSION),
+                );
             }
             // Gemini never reaches here: `method_url` rejects it first.
             _ => {
@@ -160,14 +175,25 @@ impl BaseChannel for Azure {
             *map = headers;
         }
         let body = match ctx.request.body {
-            HttpBody::Bytes(bytes) => HttpBody::Bytes(cache::shape(
-                bytes,
-                cache::rules_for(
-                    ctx.operation.dialect,
-                    config.enable_claude_magic_cache,
-                    config.enable_openai_magic_cache,
-                ),
-            )),
+            HttpBody::Bytes(bytes) => {
+                let bytes = cache::shape(
+                    bytes,
+                    cache::rules_for(
+                        ctx.operation.dialect,
+                        config.enable_claude_magic_cache,
+                        config.enable_openai_magic_cache,
+                    ),
+                );
+                HttpBody::Bytes(
+                    if ctx.operation.dialect == Dialect::Claude
+                        && ctx.operation.operation != Operation::CountTokens
+                    {
+                        claude_images::fit_bytes(bytes, false)
+                    } else {
+                        bytes
+                    },
+                )
+            }
             body => body,
         };
         builder

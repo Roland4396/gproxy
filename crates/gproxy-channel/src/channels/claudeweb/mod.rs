@@ -39,7 +39,6 @@ pub use turn::{CONTINUATION_SECS, Registry, continuation_key};
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use futures_util::StreamExt;
 use gproxy_protocol::{
     Dialect, HttpBody, Operation, WireResponse,
     capability::{CapabilityError, CapabilityErrorKind, CapabilityErrorStage},
@@ -47,18 +46,16 @@ use gproxy_protocol::{
 };
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use serde::Deserialize;
+use serde_json::Value;
 
-use crate::channel::{UsageExtras, 
+use crate::channel::{
     BaseChannel, ChannelCapabilities, ChannelDescriptor, ChannelError, ConfigKey, ConfigKeyKind,
-    CookieLogin, CredentialRefresh, HOST_CONFIG_KEYS, LoginMode, OperationContext, OperationFuture,
-    ProviderView, QuotaModel, QuotaQuery, };
-use gproxy_client::{ConnectionConfig};
+    CredentialRefresh, HOST_CONFIG_KEYS, OperationContext, OperationFuture, ProviderView,
+    QuotaModel, QuotaQuery, UsageExtras,
+};
+use gproxy_client::ConnectionConfig;
 
 pub const ID: &str = "claudeweb";
-/// Bootstrap replies carry the whole front-end configuration.
-const MAX_SERVICE_BODY: usize = 16 * 1024 * 1024;
-/// Client requests may embed base64 images destined for upload.
-const MAX_REQUEST_BODY: usize = 64 * 1024 * 1024;
 
 /// Provider `config` JSON understood by this channel. Unknown keys are ignored.
 #[derive(Debug, Deserialize)]
@@ -156,24 +153,7 @@ fn system_time(unix_ms: i64) -> std::time::SystemTime {
     std::time::UNIX_EPOCH + std::time::Duration::from_millis(unix_ms.max(0).unsigned_abs())
 }
 
-async fn read_body(body: HttpBody, limit: usize) -> Result<Bytes, ChannelError> {
-    match body {
-        HttpBody::Bytes(bytes) => Ok(bytes),
-        HttpBody::Stream(mut stream) => {
-            let mut out = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| ChannelError::InvalidResponse(e.to_string()))?;
-                out.extend_from_slice(&chunk);
-                if out.len() > limit {
-                    return Err(ChannelError::InvalidResponse(
-                        "body exceeds the read limit".into(),
-                    ));
-                }
-            }
-            Ok(Bytes::from(out))
-        }
-    }
-}
+use crate::channel::read_body;
 
 fn local_response(content_type: &'static str, body: Bytes) -> WireResponse<HttpBody> {
     let mut headers = HeaderMap::new();
@@ -205,13 +185,12 @@ impl BaseChannel for ClaudeWeb {
         ChannelDescriptor {
             id: ID,
             display_name: "Claude Web (claude.ai session)",
-            login_modes: vec![LoginMode::Cookie],
+            credential_kinds: vec!["cookie"],
+            login_modes: vec![],
             capabilities: ChannelCapabilities {
                 refresh: true,
                 quota_query: true,
-                quota_reset: false,
-                services: false,
-                websocket: false,
+                ..Default::default()
             },
             config_keys: [
                 ConfigKey::optional(
@@ -250,7 +229,9 @@ impl BaseChannel for ClaudeWeb {
         Some(default_connection())
     }
 
-    fn local_operations(&self) -> &'static [Operation] { &[Operation::ListModels] }
+    fn local_operations(&self) -> &'static [Operation] {
+        &[Operation::ListModels]
+    }
 
     fn native_dialects(&self, _provider: ProviderView<'_>, operation: Operation) -> Vec<Dialect> {
         match operation {
@@ -331,10 +312,19 @@ impl BaseChannel for ClaudeWeb {
         })
     }
 
-    fn credential_refresh(&self) -> Option<&dyn CredentialRefresh> {
-        Some(self)
+    fn validate_credential_secret(&self, secret: &Value) -> Result<(), ChannelError> {
+        auth::field(secret, "cookie")
+            .or_else(|| auth::field(secret, "session_key"))
+            .and_then(auth::normalize_cookie)
+            .map(|_| ())
+            .ok_or(ChannelError::InvalidCredential)
     }
-    fn cookie_login(&self) -> Option<&dyn CookieLogin> {
+
+    fn initial_credential_expiry(&self, _secret: &Value) -> Option<i64> {
+        Some(0)
+    }
+
+    fn credential_refresh(&self) -> Option<&dyn CredentialRefresh> {
         Some(self)
     }
     fn quota_query(&self) -> Option<&dyn QuotaQuery> {

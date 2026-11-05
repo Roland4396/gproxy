@@ -19,10 +19,40 @@ pub struct TokenUsage {
     /// Total output including reasoning; reasoning is a subset, not additive.
     pub output_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
-    pub cache_creation_5m_tokens: Option<u64>,
-    pub cache_creation_30m_tokens: Option<u64>,
-    pub cache_creation_1h_tokens: Option<u64>,
+    /// Reported writes grouped by retention. Empty means unreported.
+    pub cache_creation: Vec<CacheCreation>,
     pub reasoning_tokens: Option<u64>,
+}
+
+/// One reported cache-write quantity. Unknown retention is not a default TTL.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CacheCreation {
+    pub tokens: u64,
+    pub ttl_seconds: Option<u64>,
+}
+
+impl TokenUsage {
+    pub fn cache_creation_tokens(&self) -> u64 {
+        self.cache_creation
+            .iter()
+            .fold(0, |sum, entry| sum.saturating_add(entry.tokens))
+    }
+
+    pub fn add_cache_creation(&mut self, tokens: Option<u64>, ttl_seconds: Option<u64>) {
+        let Some(tokens) = tokens else { return };
+        if let Some(entry) = self
+            .cache_creation
+            .iter_mut()
+            .find(|entry| entry.ttl_seconds == ttl_seconds)
+        {
+            entry.tokens = entry.tokens.saturating_add(tokens);
+        } else {
+            self.cache_creation.push(CacheCreation {
+                tokens,
+                ttl_seconds,
+            });
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -43,6 +73,9 @@ pub struct NormalizedUsage {
     pub dimensions: BTreeMap<String, String>,
     /// Actual upstream serving tier, which may differ from the requested tier.
     pub actual_service_tier: Option<String>,
+    /// The model the standard response names as having served it, which may
+    /// differ from the model the request was routed to.
+    pub response_model: Option<String>,
     pub completeness: UsageCompleteness,
     /// When present, per-attempt usage replaces aggregate usage for billing.
     pub attempts: Vec<UsageAttempt>,
@@ -83,18 +116,11 @@ impl NormalizedUsage {
                 &mut total.tokens.reasoning_tokens,
                 value.tokens.reasoning_tokens,
             );
-            add(
-                &mut total.tokens.cache_creation_5m_tokens,
-                value.tokens.cache_creation_5m_tokens,
-            );
-            add(
-                &mut total.tokens.cache_creation_30m_tokens,
-                value.tokens.cache_creation_30m_tokens,
-            );
-            add(
-                &mut total.tokens.cache_creation_1h_tokens,
-                value.tokens.cache_creation_1h_tokens,
-            );
+            for entry in &value.tokens.cache_creation {
+                total
+                    .tokens
+                    .add_cache_creation(Some(entry.tokens), entry.ttl_seconds);
+            }
             for (key, count) in &value.metrics {
                 // Saturating: upstream-reported amounts, and a Decimal
                 // overflow panics.
@@ -104,6 +130,7 @@ impl NormalizedUsage {
             if first {
                 total.dimensions = value.dimensions.clone();
                 total.actual_service_tier = value.actual_service_tier.clone();
+                total.response_model = value.response_model.clone();
                 first = false;
             } else {
                 total
@@ -111,6 +138,9 @@ impl NormalizedUsage {
                     .retain(|key, v| value.dimensions.get(key) == Some(v));
                 if total.actual_service_tier != value.actual_service_tier {
                     total.actual_service_tier = None;
+                }
+                if total.response_model != value.response_model {
+                    total.response_model = None;
                 }
             }
             if value.completeness != UsageCompleteness::Complete {
@@ -123,6 +153,8 @@ impl NormalizedUsage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageAttempt {
+    /// A delegated API may have a different billing operation from its parent session.
+    pub operation: Option<crate::Operation>,
     pub model: String,
     pub usage: Box<NormalizedUsage>,
     /// None when the provider did not establish whether this attempt is charged.

@@ -103,7 +103,7 @@ fn joins_base_url_and_path_and_authenticates_per_family() {
     .unwrap();
     assert_eq!(claude.uri(), "https://claude.example/v1/messages");
     assert_eq!(claude.headers()["x-api-key"], "sk-upstream");
-    assert_eq!(claude.headers()["anthropic-version"], "2023-06-01");
+    assert_eq!(claude.headers()["anthropic-version"], "2026-10-21");
     assert!(claude.headers().get("authorization").is_none());
 
     let gemini = prepare(
@@ -154,7 +154,7 @@ fn config_overrides_auth_and_adds_headers_and_declares_dialects() {
         Custom
             .native_dialects(provider(&json!({}), None), Operation::ListModels)
             .len(),
-        4
+        5
     );
 
     assert!(matches!(

@@ -408,9 +408,10 @@ async fn refresh_rotates_tokens_and_classifies_rejections() {
     assert_eq!(update.expires_at_ms, Some(1_800_000_000_000));
     assert_eq!(update.secret["access_token"], new_access);
     assert_eq!(update.secret["refresh_token"], "rt-2");
+    // The login's account survives a refresh whose id token names another.
     assert_eq!(
         update.secret["provider_fields"]["chatgpt_account_id"],
-        "acct-2"
+        "acct-1"
     );
     assert_eq!(
         update.secret["provider_fields"]["chatgpt_plan_type"],
@@ -779,7 +780,12 @@ fn allowed_headers_applies_to_codex_too() {
     assert_eq!(h["session-id"], "sess-1");
     assert_eq!(h["thread-id"], "thread-1");
     assert_eq!(h["x-client-request-id"], "thread");
-    assert_eq!(h["x-codex-turn-metadata"], "{\"request_kind\":\"turn\"}");
+    let turn: Value = serde_json::from_str(h["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
+    assert_eq!(turn["request_kind"], "turn");
+    assert_eq!(
+        turn["installation_id"],
+        h["x-codex-installation-id"].to_str().unwrap()
+    );
     assert_eq!(h["x-codex-turn-state"], "sticky");
     assert_eq!(h["version"], "0.155.1");
     assert!(
@@ -1490,7 +1496,7 @@ fn magic_cache_strings_shape_responses_bodies_only_when_enabled() {
         assert_eq!(
             input[0],
             json!({"type": "message", "role": "developer", "content": [
-                {"type": "input_text", "text": " ", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                {"type": "input_text", "text": " ", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}
             ]})
         );
         assert_eq!(
@@ -1741,16 +1747,17 @@ async fn converted_bodies_get_the_cli_session_window_and_turn_identity() {
 }
 
 #[tokio::test]
-async fn client_supplied_identity_is_kept_verbatim() {
+async fn client_turn_identity_is_kept_with_the_selected_installation() {
     let config = json!({});
     let state = Arc::new(MemoryState::default());
     let client = Arc::new(ScriptClient::new(vec![
         reply(StatusCode::OK, json!({})),
         reply(StatusCode::OK, json!({})),
+        reply(StatusCode::OK, json!({})),
     ]));
     let body = prompt("conv-1", json!([{"role": "user", "content": "hi"}]));
 
-    // A real CLI session: its own turn metadata, nothing synthesized.
+    // A real CLI session keeps its turn fields, with the selected device id.
     let mut headers = HeaderMap::new();
     headers.insert("session-id", HeaderValue::from_static("cli-session"));
     headers.insert("thread-id", HeaderValue::from_static("cli-thread"));
@@ -1770,11 +1777,13 @@ async fn client_supplied_identity_is_kept_verbatim() {
     let sent = &client.sent()[0];
     assert_eq!(header(sent, "session-id").unwrap(), "cli-session");
     assert_eq!(header(sent, "thread-id").unwrap(), "cli-thread");
+    let turn = turn_metadata(sent);
+    assert_eq!(turn["request_kind"], "turn");
     assert_eq!(
-        header(sent, "x-codex-turn-metadata").unwrap(),
-        "{\"request_kind\":\"turn\"}"
+        turn["installation_id"],
+        header(sent, "x-codex-installation-id").unwrap()
     );
-    for name in ["x-codex-window-id", "x-codex-installation-id", "version"] {
+    for name in ["x-codex-window-id", "version"] {
         assert!(sent.2.get(name).is_none(), "{name}: a CLI manages itself");
     }
 
@@ -1796,6 +1805,24 @@ async fn client_supplied_identity_is_kept_verbatim() {
     let metadata = turn_metadata(sent);
     assert_eq!(metadata["session_id"], "client-session");
     assert_eq!(metadata["window_id"], "client-session:0");
+    // A thread id remains the session identity even with a custom cache key.
+    let mut headers = HeaderMap::new();
+    headers.insert("thread-id", HeaderValue::from_static("thread-only"));
+    responses_call(
+        &config,
+        &client,
+        &state,
+        Operation::StreamGenerateContent,
+        headers,
+        prompt(
+            "separate-accounting",
+            json!([{"role":"user","content":"hi"}]),
+        ),
+    )
+    .await;
+    let sent = &client.sent()[2];
+    assert_eq!(header(sent, "session-id").unwrap(), "thread-only");
+    assert_eq!(header(sent, "thread-id").unwrap(), "thread-only");
 }
 
 #[tokio::test]
@@ -1963,14 +1990,19 @@ async fn identity_synthesis_can_be_switched_off() {
     );
     for name in IDENTITY_HEADERS
         .iter()
-        .filter(|name| **name != "session-id")
+        .filter(|name| !["session-id", "x-codex-installation-id"].contains(name))
     {
         assert!(sent.2.get(*name).is_none(), "{name}");
     }
     assert!(sent.2.get("accept").is_none());
     assert!(
-        state.entries.lock().unwrap().is_empty(),
-        "nothing remembered"
+        state
+            .entries
+            .lock()
+            .unwrap()
+            .keys()
+            .all(|key| key == "installation_id"),
+        "no turn state remembered"
     );
 }
 
@@ -2021,7 +2053,7 @@ fn shapes_converted_responses_and_avoids_cli_tool_name_collisions() {
         "temperature":1,"top_p":1,"top_logprobs":2,"safety_identifier":"x","user":"client-user","truncation":"auto",
         "input":[
             {"role":"system","content":"policy"},
-            {"type":"reasoning","id":"r1","summary":[],"status":"completed","future_item":1},
+            {"type":"reasoning","id":"r1","summary":[],"encrypted_content":"enc","status":"completed","future_item":1},
             {"type":"shell_call","id":"shell_old","call_id":"call_old","action":{"commands":["pwd"]}},
             {"type":"local_shell_call_output","id":"out1","call_id":"call-real","output":"ok","status":"completed"}
         ],
@@ -2359,7 +2391,7 @@ async fn alpha_search_preserves_search_parameters_and_returns_json() {
     let config = json!({});
     let secret = secret("at");
     let input = json!({"id":"session-1","model":"gpt-6-astra","input":"recent context",
-        "commands":{"search_query":[{"q":"OpenAI","domains":["openai.com"]}],"response_length":"short"},
+        "commands":{"search_query":[{"q":"OpenAI","domains":["openai.com"]}],"literature_search_query":[{"q":"sparse attention"}],"response_length":"short"},
         "settings":{"external_web_access":"live"},"max_output_tokens":2500,"future":true});
     let answer =
         json!({"output":"result","encrypted_output":"opaque","results":[{"future_result":1}]});
@@ -2877,4 +2909,24 @@ async fn reset_refuses_a_selection_from_another_channel_without_sending() {
         .await;
     assert!(matches!(result, Err(ChannelError::InvalidConfig(_))));
     assert!(client.sent().is_empty());
+}
+
+#[test]
+fn cached_system_prefix_keeps_its_breakpoint_in_codex_input() {
+    let body = prepared_body(
+        json!({}),
+        Operation::GenerateContent,
+        json!({
+            "model":"gpt-6.1-sol", "instructions":"base",
+            "input":[{"role":"system", "content":[
+                {"type":"input_text", "text":"shared", "prompt_cache_breakpoint":{"mode":"explicit","ttl":"12h"}}
+            ]}, {"role":"user", "content":"hello"}]
+        }),
+    );
+    assert_eq!(body["instructions"], "base");
+    assert_eq!(body["input"][0]["role"], "developer");
+    assert_eq!(
+        body["input"][0]["content"][0]["prompt_cache_breakpoint"]["ttl"],
+        "12h"
+    );
 }

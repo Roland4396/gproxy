@@ -33,7 +33,7 @@
 //!
 //! | Command | What it does |
 //! |---|---|
-//! | `serve` (default) | rotate if asked, bootstrap if the instance is new, bind, serve |
+//! | `serve` (default) | rotate if asked, bootstrap if the instance is new, bind, serve; a first run in a terminal asks first ([`wizard`]) |
 //! | `migrate` | create the schema, or apply the migrations this database has not seen |
 //! | `bootstrap admin` | create the first administrator, idempotently |
 //! | `export` | the instance's configuration as one JSON document |
@@ -55,20 +55,121 @@ pub mod serve;
 #[cfg(feature = "postgres")]
 pub mod serverless;
 pub mod service;
+pub mod setup;
 pub mod telemetry;
 pub mod transfer;
 pub mod update;
 pub mod v3;
+pub mod wizard;
 
 pub use cli::{Cli, Command};
 pub use config::Settings;
 pub use error::{Error, Result};
+
+/// Channels a downstream binary adds to the ones this build compiled in, set
+/// once by [`run_with`] and read by the one place that assembles an instance.
+///
+/// Process-wide rather than threaded through: every command that opens an
+/// instance, and the v3 upgrade that opens one of its own, has to see the same
+/// list, and none of them has any other reason to carry it.
+pub(crate) static EXTRA_CHANNELS: std::sync::OnceLock<
+    Vec<std::sync::Arc<dyn gproxy_sdk::BaseChannel>>,
+> = std::sync::OnceLock::new();
+
+/// [`run`], with channels implemented outside this repository.
+///
+/// This is the whole plugin surface: a binary crate that depends on `gproxy`
+/// and on its own channel crate calls this from `main` instead of [`run`].
+/// A channel whose id matches a compiled-in one replaces it.
+pub async fn run_with(
+    cli: Cli,
+    channels: Vec<std::sync::Arc<dyn gproxy_sdk::BaseChannel>>,
+) -> Result<()> {
+    if EXTRA_CHANNELS.set(channels).is_err() {
+        return Err(Error::other("run_with was called twice in one process"));
+    }
+    run(cli).await
+}
+
+/// The whole `gproxy` process, for `main` to return: `.env`, the arguments, the
+/// runtime, then [`run_with`]. The order is explained in `main.rs`.
+///
+/// A downstream binary carrying its own channels is this one call:
+/// `fn main() -> ExitCode { gproxy::main_with(vec![Arc::new(MyChannel)]) }`.
+pub fn main_with(
+    channels: Vec<std::sync::Arc<dyn gproxy_sdk::BaseChannel>>,
+) -> std::process::ExitCode {
+    // Before the runtime, before `clap`: see the module note.
+    if let Err(error) = env::load_default() {
+        eprintln!("gproxy: {error}");
+        return std::process::ExitCode::FAILURE;
+    }
+    let cli = <Cli as clap::Parser>::parse();
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("gproxy: cannot start the async runtime: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(run_with(cli, channels)) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            // The log subscriber may or may not be installed by the time a
+            // failure happens — a bad `--log-filter` is itself one of the
+            // failures — so this goes straight to standard error.
+            eprintln!("gproxy: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Write generated text to standard output. A reader that closes early
+/// (`| head`) is not a failure: it has everything it asked for.
+fn print_generated(bytes: &[u8], what: &str) -> Result<()> {
+    use std::io::Write as _;
+    match std::io::stdout().lock().write_all(bytes) {
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+            Err(Error::other(format!("cannot write the {what}: {error}")))
+        }
+        _ => Ok(()),
+    }
+}
 
 /// Run one invocation, with the configuration layered exactly once.
 ///
 /// Returns to the caller rather than exiting, so the process's exit code is
 /// decided in one place and a failure is printed in one format.
 pub async fn run(cli: Cli) -> Result<()> {
+    // These describe the binary, not an instance: no configuration is layered,
+    // so they work before any master key or data directory exists.
+    match &cli.command {
+        Some(Command::Completions { shell }) => {
+            let mut command = <Cli as clap::CommandFactory>::command();
+            let mut script = Vec::new();
+            clap_complete::generate(*shell, &mut command, "gproxy", &mut script);
+            return print_generated(&script, "completion script");
+        }
+        Some(Command::Man { out_dir: Some(dir) }) => {
+            let command = <Cli as clap::CommandFactory>::command();
+            return clap_mangen::generate_to(command, dir)
+                .map_err(|error| Error::other(format!("cannot write the man pages: {error}")));
+        }
+        Some(Command::Man { out_dir: None }) => {
+            let command = <Cli as clap::CommandFactory>::command();
+            let mut page = Vec::new();
+            clap_mangen::Man::new(command)
+                .render(&mut page)
+                .map_err(|error| Error::other(format!("cannot render the man page: {error}")))?;
+            return print_generated(&page, "man page");
+        }
+        _ => {}
+    }
+
     let settings = config::settings(&cli)?;
     telemetry::init(&settings.telemetry)?;
     // Layered here with everything else, and refused here too: a bad
@@ -81,6 +182,12 @@ pub async fn run(cli: Cli) -> Result<()> {
     // and `Settings` is the result of the layering — it has deliberately
     // forgotten which file produced it.
     let config_path = cli.options.config.clone();
+
+    // A first run with a person at the terminal is asked rather than
+    // provisioned; everything else proceeds exactly as before.
+    if wizard::wanted(&cli, &settings) {
+        return wizard::run(cli, settings, updates).await;
+    }
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Migrate { status } => instance::migrate(&settings.config, status).await,
@@ -138,5 +245,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         // Opens no database and touches no row: an update is about this
         // executable, not about this instance's configuration.
         Command::Update { check, channel } => update::run(&settings, updates, check, channel).await,
+        Command::Completions { .. } | Command::Man { .. } => Ok(()),
     }
 }

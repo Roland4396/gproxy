@@ -16,24 +16,65 @@ use crate::channel::{
     CredentialUpdate, LoginContext, OAuthAuthorizationCode, OAuthCredential, OperationFuture,
     RefreshContext,
 };
-use crate::channels::shared::code_assist::google::{self, GoogleTool};
+use crate::channels::shared::code_assist::google::{self, GoogleTool, Onboarding};
 use gproxy_protocol::capability::CapabilityFuture;
-use serde_json::{Value, json};
+use serde_json::Value;
+use std::time::Duration;
 
 /// `ClientMetadata` for `loadCodeAssist`/`onboardUser`: the CLI reports no
 /// IDE and no platform, and identifies its plugin as `GEMINI`; a project
 /// hint is repeated as `duetProject` (v3 `geminicli/login.rs::metadata`).
-fn metadata(project: Option<&str>) -> Value {
-    let mut metadata = json!({
-        "ideType": "IDE_UNSPECIFIED",
-        "platform": "PLATFORM_UNSPECIFIED",
-        "pluginType": "GEMINI",
-    });
+/// Key order is `setup.ts`'s: `{...coreClientMetadata, duetProject}`.
+fn metadata(project: Option<&str>) -> String {
+    let mut metadata = String::from(
+        r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI""#,
+    );
     if let Some(project) = project {
-        metadata["duetProject"] = Value::String(project.into());
+        metadata.push_str(&format!(
+            r#","duetProject":{}"#,
+            Value::String(project.into())
+        ));
     }
+    metadata.push('}');
     metadata
 }
+
+/// gemini-cli `setup.ts::_doSetupUser`: an account that already has a tier
+/// (`currentTier`) is never onboarded again; without a project it needs the
+/// hint, or it is refused with the server's ineligibility reasons. Only an
+/// account with no tier is onboarded, on the default allowed tier, else
+/// `legacy-tier`.
+fn onboarding(loaded: &Value, hint: Option<&str>) -> Result<Onboarding, ChannelError> {
+    if loaded
+        .get("currentTier")
+        .is_some_and(|tier| !tier.is_null())
+    {
+        return match hint {
+            Some(project) => Ok(Onboarding::Project(project.to_owned())),
+            None => Err(google::project_required(loaded)),
+        };
+    }
+    Ok(Onboarding::Tier(
+        google::default_tier(loaded)
+            .unwrap_or(FALLBACK_TIER)
+            .to_owned(),
+    ))
+}
+
+/// The google-auth-library the CLI pins (`packages/core/package.json`
+/// `"google-auth-library": "10.9.0"`), as its token calls name it.
+const AUTH_LIBRARY: &str = "google-api-nodejs-client/10.9.0";
+
+/// `fetchAndCacheUserInfo` is a bare global `fetch` with only
+/// `Authorization`; these are what Node's undici adds to it. Its
+/// `accept-encoding: gzip, deflate` is left to the connection, which decodes
+/// nothing by default.
+const USERINFO_HEADERS: &[(&str, &str)] = &[
+    ("accept", "*/*"),
+    ("accept-language", "*"),
+    ("sec-fetch-mode", "cors"),
+    ("user-agent", "node"),
+];
 
 fn tool(config: &GeminiCliConfig) -> GoogleTool<'_> {
     GoogleTool {
@@ -42,7 +83,31 @@ fn tool(config: &GeminiCliConfig) -> GoogleTool<'_> {
         token_url: non_empty(&config.token_url, super::DEFAULT_TOKEN_URL),
         redirect_uri: DEFAULT_REDIRECT_URI,
         scope: OAUTH_SCOPE,
-        fallback_tier: FALLBACK_TIER,
+        // `authWithUserCode` (`oauth2.ts`): `generateAuthUrl({redirect_uri,
+        // access_type, scope, code_challenge_method, code_challenge, state})`,
+        // to which google-auth-library appends `response_type`, `client_id`.
+        authorize_params: &[
+            "redirect_uri",
+            "access_type",
+            "scope",
+            "code_challenge_method",
+            "code_challenge",
+            "state",
+            "response_type",
+            "client_id",
+        ],
+        auth_library: AUTH_LIBRARY,
+        node_client: super::GOOG_API_CLIENT,
+        // `setupUser` goes through `OAuth2Client.request`, whose interceptor
+        // adds the runtime banner (`authclient.js`).
+        code_assist_api_client: Some(super::GOOG_API_CLIENT),
+        // `CodeAssistServer.requestPost` sets `responseType: 'json'`.
+        code_assist_accept: "application/json",
+        userinfo_headers: USERINFO_HEADERS,
+        onboarding,
+        require_project: true,
+        // gemini-cli `setup.ts`: `setTimeout(f, 5000)` between polls.
+        onboard_poll: Duration::from_secs(5),
         user_agent: super::CLI_USER_AGENT,
         metadata,
     }

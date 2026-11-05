@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vitest/config"
+import { fontPackage } from "./scripts/font-package.mjs"
 
 const consoleDir = path.dirname(fileURLToPath(import.meta.url))
 const backend = process.env.GPROXY_DEV_BACKEND ?? "http://127.0.0.1:8787"
@@ -12,8 +13,7 @@ const workspace = readFileSync(path.resolve(consoleDir, "../Cargo.toml"), "utf8"
 const version = /\[workspace\.package\][\s\S]*?version\s*=\s*"([^"]+)"/.exec(workspace)?.[1] ?? "unknown"
 const buildHash = process.env.GPROXY_BUILD_HASH
   ?? execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: path.resolve(consoleDir, ".."), encoding: "utf8" }).trim()
-const fontDir = path.resolve(consoleDir, "../docs/public/fonts")
-const { stylesheet: fontStylesheet } = JSON.parse(readFileSync(path.join(fontDir, "manifest.json"), "utf8")) as { stylesheet: string }
+const fonts = fontPackage(consoleDir)
 
 // `gproxy-host-axum` serves the bundle under `/console`, and only under it:
 // `console::asset_name` strips exactly that prefix, so a document loaded from
@@ -28,31 +28,26 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), {
     name: "console-fonts",
     transformIndexHtml() {
-      return [{ tag: "meta", attrs: { name: "gproxy-fonts", content: `/console/fonts/${fontStylesheet}` }, injectTo: "head" }]
+      return [{ tag: "meta", attrs: { name: "gproxy-fonts", content: "/console/fonts/active.css" }, injectTo: "head" }]
     },
     generateBundle() {
-      // Font files live on the documentation site's CDN, outside the native
-      // binary and the Workers Assets bundle. Only the face definitions ship.
-      this.emitFile({ type: "asset", fileName: `fonts/${fontStylesheet}`, source: readFileSync(path.join(fontDir, fontStylesheet)) })
-    },
-    configureServer(server) {
-      server.middlewares.use((request, response, next) => {
-        const file = request.url?.split("?")[0].match(/\/(?:console\/)?fonts\/([a-f0-9]{64}\.(?:css|woff2))$/)?.[1]
-        if (!file) return next()
-        try {
-          const bytes = readFileSync(path.join(fontDir, file))
-          response.setHeader("Content-Type", file.endsWith(".css") ? "text/css" : "font/woff2")
-          response.end(bytes)
-        } catch {
-          next()
-        }
-      })
+      // Native hosts download font binaries only after an explicit user action.
+      this.emitFile({ type: "asset", fileName: `fonts/${fonts.stylesheet}`, source: fonts.css })
+      this.emitFile({ type: "asset", fileName: "fonts/manifest.json", source: JSON.stringify({
+        stylesheet: fonts.stylesheet,
+        packages: fonts.packages,
+        files: fonts.files.map(({ name, package: pkg, path }) => ({ name, package: pkg, path })),
+      }) })
+      for (const license of fonts.licenses) {
+        this.emitFile({ type: "asset", fileName: `licenses/fonts/${license.fileName}`, source: license.source })
+      }
     },
   }],
   resolve: { alias: { "@": path.join(consoleDir, "src") } },
   server: {
     proxy: {
       "/info": { target: backend, changeOrigin: true },
+      "/console/fonts/": { target: backend, changeOrigin: true },
       // `changeOrigin` plus an explicit `origin` is what gets a dev request
       // past the same-origin check the host applies to unsafe methods.
       "/admin/api": { target: backend, changeOrigin: true, headers: { origin: backend } },
@@ -60,7 +55,13 @@ export default defineConfig({
       "/v1/oauth": { target: backend, changeOrigin: true, headers: { origin: backend } },
     },
   },
-  build: { outDir: "dist", assetsDir: "assets", emptyOutDir: true },
+  // Chrome 108, not Vite's 111: Android System WebView can be stuck there on
+  // devices whose vendor stopped shipping updates and that have no Play Store
+  // (#307). 108 already has the layout features the console uses (individual
+  // transforms, dvh, :has, container queries); Lightning CSS lowers the oklch
+  // and color-mix theme colours it lacks. Keep the Android warning in
+  // MainActivity (MIN_WEBVIEW_MAJOR) on the same version.
+  build: { outDir: "dist", assetsDir: "assets", emptyOutDir: true, cssTarget: ["chrome108", "edge111", "firefox114", "safari16.4"] },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],

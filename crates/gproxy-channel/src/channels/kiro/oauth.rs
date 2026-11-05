@@ -35,20 +35,30 @@ use crate::channel::{
     CredentialUpdate, CredentialView, DeviceAuthorization, DevicePoll, LoginContext,
     OAuthAuthorizationCode, OAuthCredential, OAuthDeviceCode, OperationFuture, RefreshContext,
 };
-use http::{Method, StatusCode};
+use http::{HeaderMap, Method, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// The client name both the device authorization and the OIDC registration
-/// use (v3 `login.rs`).
+/// The client id the desktop device flow names, which is also kiro-cli's
+/// User-Agent (KiroCrew `login/endpoints.py` `USER_AGENT`).
 const CLIENT_NAME: &str = "Kiro-CLI";
+/// The name kiro-cli registers its AWS OIDC client under (KiroCrew
+/// `login/endpoints.py`: "kiro-cli uses \"Kiro CLI\"").
+const REGISTRATION_CLIENT_NAME: &str = "Kiro CLI";
 /// The registered client's id, under the same name wherever it travels: the
 /// login session's `provider_state`, then the credential's `provider_fields`.
 const CLIENT_ID: &str = "client_id";
 /// Its secret, in `provider_state` and then in `provider_secrets` — never in
 /// `provider_fields`, which the host publishes as metadata.
 const CLIENT_SECRET: &str = "client_secret";
+/// When that secret stops working, in unix milliseconds: a public fact that
+/// travels beside the id. The Q Developer CLI drops a registration past this
+/// stamp and stops refreshing (`builder_id.rs` `load_from_secret_store`),
+/// since no refresh can renew the client itself.
+const CLIENT_SECRET_EXPIRES_AT_MS: &str = "client_secret_expires_at_ms";
+/// The same CLI's margin for a stamp that might pass in transit.
+const EXPIRY_MARGIN_MS: i64 = 60_000;
 /// What the upstream grants when it does not say.
 const DEFAULT_EXPIRES_IN_SECS: i64 = 3_600;
 
@@ -111,9 +121,15 @@ struct DeviceCodeReply {
     verification_uri: Option<String>,
     #[serde(default)]
     verification_uri_complete: Option<String>,
-    /// The desktop app states its polling interval in milliseconds.
+    /// The desktop service states its timings in milliseconds (KiroCrew
+    /// `login/device.py`: `expiresInMilliseconds`, `intervalInMilliseconds`);
+    /// the second-based names are read when those are absent.
     #[serde(default)]
     interval_in_milliseconds: Option<u64>,
+    #[serde(default)]
+    interval: Option<u64>,
+    #[serde(default)]
+    expires_in_milliseconds: Option<i64>,
     #[serde(default)]
     expires_in: Option<i64>,
 }
@@ -148,8 +164,8 @@ struct TokenReply {
     expires_in: Option<i64>,
 }
 
-/// What `RegisterClient` answers (v3 `login.rs`); the timestamps it also
-/// returns say nothing this channel acts on.
+/// What `RegisterClient` answers (v3 `login.rs`). `clientSecretExpiresAt` is
+/// unix seconds and bounds every refresh the credential can make.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RegisteredClient {
@@ -157,6 +173,15 @@ struct RegisteredClient {
     client_id: Option<String>,
     #[serde(default)]
     client_secret: Option<String>,
+    #[serde(default)]
+    client_secret_expires_at: Option<i64>,
+}
+
+/// A registered client: id, secret, and the secret's expiry when stated.
+struct Registration {
+    id: String,
+    secret: String,
+    expires_at_ms: Option<i64>,
 }
 
 impl OAuthDeviceCode for super::Kiro {
@@ -191,12 +216,20 @@ impl OAuthDeviceCode for super::Kiro {
                 verification_uri: verification,
                 verification_uri_complete: reply.verification_uri_complete,
                 expires_at_ms: reply
-                    .expires_in
-                    .filter(|seconds| *seconds > 0)
-                    .map(|seconds| unix_now_ms().saturating_add(seconds.saturating_mul(1_000))),
+                    .expires_in_milliseconds
+                    .filter(|milliseconds| *milliseconds > 0)
+                    .or_else(|| {
+                        reply
+                            .expires_in
+                            .filter(|seconds| *seconds > 0)
+                            .map(|seconds| seconds.saturating_mul(1_000))
+                    })
+                    .map(|milliseconds| unix_now_ms().saturating_add(milliseconds)),
                 interval_secs: reply
                     .interval_in_milliseconds
-                    .map(|milliseconds| (milliseconds / 1_000).max(1))
+                    .map(|milliseconds| milliseconds / 1_000)
+                    .or(reply.interval)
+                    .map(|seconds| seconds.max(1))
                     .unwrap_or(5),
                 provider_state: BTreeMap::new(),
             })
@@ -210,15 +243,26 @@ impl OAuthDeviceCode for super::Kiro {
     ) -> OperationFuture<'a, DevicePoll> {
         Box::pin(async move {
             let config = KiroConfig::from_view(context.provider)?;
-            let body = json!({"deviceCode": authorization.device_code, "clientId": CLIENT_NAME});
+            // Written out because `json!` sorts its keys; kiro-cli sends
+            // `{deviceCode, clientId}` (KiroCrew `login/device.py`).
+            let body = format!(
+                "{{\"deviceCode\":{},\"clientId\":{}}}",
+                Value::String(authorization.device_code.clone()),
+                Value::String(CLIENT_NAME.into()),
+            );
             let (status, _, bytes) = send(
                 context.client,
                 Method::POST,
                 &format!("{}/oauth/device/poll", config.auth_base_url()),
                 json_headers(),
-                Some(body.to_string().into_bytes()),
+                Some(body.into_bytes()),
             )
             .await?;
+            // A refused poll is retried until the device code expires, as
+            // KiroCrew's `poll_device_token` does.
+            if !status.is_success() {
+                return Ok(DevicePoll::Pending);
+            }
             let Ok(reply) = serde_json::from_slice::<DevicePollReply>(&bytes) else {
                 return Err(ChannelError::UpstreamResponse {
                     status,
@@ -246,13 +290,10 @@ impl OAuthDeviceCode for super::Kiro {
                         BTreeMap::new(),
                     )))
                 }
-                // `access_denied` and anything the desktop app has not
-                // documented both mean this attempt is over.
-                Some(_) => Ok(DevicePoll::Denied),
-                None => Err(ChannelError::UpstreamResponse {
-                    status,
-                    body: bytes,
-                }),
+                // A refused or unknown device code ends this attempt.
+                Some("access_denied" | "invalid_token") => Ok(DevicePoll::Denied),
+                // Any status the service has not documented is waited out.
+                _ => Ok(DevicePoll::Pending),
             }
         })
     }
@@ -275,7 +316,7 @@ impl OAuthAuthorizationCode for super::Kiro {
                 "" => DEFAULT_REDIRECT_URI,
                 uri => uri,
             };
-            let (client_id, client_secret) =
+            let registration =
                 register_client(context.client, &region, redirect_uri, config.start_url())
                     .await?
                     .ok_or_else(|| {
@@ -284,8 +325,12 @@ impl OAuthAuthorizationCode for super::Kiro {
                         )
                     })?;
             let mut provider_state = BTreeMap::new();
-            provider_state.insert(CLIENT_ID.into(), Value::String(client_id.clone()));
-            provider_state.insert(CLIENT_SECRET.into(), Value::String(client_secret));
+            provider_state.insert(CLIENT_ID.into(), Value::String(registration.id.clone()));
+            provider_state.insert(CLIENT_SECRET.into(), Value::String(registration.secret));
+            if let Some(expires) = registration.expires_at_ms {
+                provider_state.insert(CLIENT_SECRET_EXPIRES_AT_MS.into(), Value::from(expires));
+            }
+            let client_id = registration.id;
             let query = form_encode(&[
                 ("response_type", "code"),
                 ("client_id", &client_id),
@@ -355,6 +400,13 @@ impl OAuthAuthorizationCode for super::Kiro {
             field(&mut fields, "profile_arn", reply.profile_arn);
             let mut secrets = BTreeMap::new();
             fields.insert(CLIENT_ID.into(), Value::String(client_id));
+            if let Some(expires) = grant
+                .provider_state
+                .get(CLIENT_SECRET_EXPIRES_AT_MS)
+                .and_then(Value::as_i64)
+            {
+                fields.insert(CLIENT_SECRET_EXPIRES_AT_MS.into(), Value::from(expires));
+            }
             secrets.insert(CLIENT_SECRET.into(), Value::String(client_secret));
             Ok(credential(
                 access,
@@ -377,9 +429,9 @@ async fn register_client(
     region: &str,
     redirect_uri: &str,
     start_url: &str,
-) -> Result<Option<(String, String)>, ChannelError> {
+) -> Result<Option<Registration>, ChannelError> {
     let body = json!({
-        "clientName": CLIENT_NAME,
+        "clientName": REGISTRATION_CLIENT_NAME,
         "clientType": "public",
         "scopes": OAUTH_SCOPE.split(' ').collect::<Vec<_>>(),
         "grantTypes": ["authorization_code", "refresh_token"],
@@ -399,10 +451,14 @@ async fn register_client(
     }
     let reply: RegisteredClient = serde_json::from_slice(&bytes)
         .map_err(|error| invalid_response(format!("client registration: {error}")))?;
-    Ok(Some((
-        required(reply.client_id, "clientId")?,
-        required(reply.client_secret, "clientSecret")?,
-    )))
+    Ok(Some(Registration {
+        id: required(reply.client_id, "clientId")?,
+        secret: required(reply.client_secret, "clientSecret")?,
+        expires_at_ms: reply
+            .client_secret_expires_at
+            .filter(|seconds| *seconds > 0)
+            .map(|seconds| seconds.saturating_mul(1_000)),
+    }))
 }
 
 /// The pair `authorize` registered, as the login session parked it. Both halves
@@ -433,32 +489,96 @@ fn own_client(credential: &CredentialView<'_>) -> Option<(String, String)> {
     id.zip(secret)
 }
 
+/// When the credential's registered client stops working, if it was told.
+/// Read like `fact`: host metadata, then `provider_fields`, then flat.
+fn client_secret_expires_at_ms(credential: &CredentialView<'_>) -> Option<i64> {
+    [
+        credential.metadata.get(CLIENT_SECRET_EXPIRES_AT_MS),
+        credential
+            .secret
+            .pointer(&format!("/provider_fields/{CLIENT_SECRET_EXPIRES_AT_MS}")),
+        credential.secret.get(CLIENT_SECRET_EXPIRES_AT_MS),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_i64)
+}
+
 /// An Identity Center credential is one that names a registered client, in
 /// its own credential, or that carries an Identity Center region.
 fn is_identity_center(credential: &CredentialView<'_>) -> bool {
     fact(credential, CLIENT_ID).is_some() || fact(credential, "region").is_some()
 }
 
-/// AWS names a definitive refusal in `__type` or `error`; anything else may
-/// be transient and must not kill the credential.
-fn definitive(status: StatusCode, body: &[u8]) -> Option<String> {
-    if status == StatusCode::UNAUTHORIZED {
-        return Some(format!("http {}", status.as_u16()));
-    }
+/// The refusal codes that end a grant. AWS SSO-OIDC states one as the
+/// exception name (`x-amzn-errortype`, `__type`) and as the OAuth code in
+/// `error` (aws-sdk-rust `ssooidc` error shapes: `expired_token`,
+/// `invalid_client`, `access_denied`, ...), so both spellings are listed.
+const REFUSALS: &[&str] = &[
+    "invalid_grant",
+    "invalidgrant",
+    "invalid_client",
+    "invalidclient",
+    "expired_token",
+    "expiredtoken",
+    "access_denied",
+    "accessdenied",
+    "unauthorized_client",
+    "unauthorizedclient",
+    "unauthorized",
+];
+
+/// Codes that only ask the caller to slow down.
+const THROTTLES: &[&str] = &["slow_down", "slowdown", "throttl", "too_many", "toomany"];
+
+/// Whether a refresh failure is definitive. Throttling never is. The Kiro
+/// desktop service's `/refreshToken` refuses with a bare 400, 401 or 403,
+/// which KiroCrew (`auth/refresh.py` `_REJECTED_STATUSES`) treats as a dead
+/// grant. AWS OIDC is judged by the code it names, read from the
+/// `x-amzn-errortype` header and the body alike; a bare 401 is definitive.
+fn definitive(
+    social: bool,
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Option<String> {
     if !status.is_client_error() {
         return None;
     }
-    let value: Value = serde_json::from_slice(body).ok()?;
-    let code = ["__type", "error", "message"]
+    let value: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let codes: Vec<&str> = headers
+        .get("x-amzn-errortype")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(':').next().unwrap_or(value).trim())
         .into_iter()
-        .find_map(|name| value.get(name).and_then(Value::as_str))?;
-    let lowered = code.to_ascii_lowercase();
-    (lowered.contains("invalid_grant")
-        || lowered.contains("invalidgrant")
-        || lowered.contains("invalid_client")
-        || lowered.contains("unauthorized")
-        || lowered.contains("accessdenied"))
-    .then(|| code.to_owned())
+        .chain(
+            ["__type", "error", "code", "message"]
+                .into_iter()
+                .filter_map(|name| value.get(name).and_then(Value::as_str)),
+        )
+        .filter(|code| !code.is_empty())
+        .collect();
+    let named = |patterns: &[&str]| {
+        codes.iter().copied().find(|code| {
+            let lowered = code.to_ascii_lowercase();
+            patterns.iter().any(|pattern| lowered.contains(pattern))
+        })
+    };
+    if status == StatusCode::TOO_MANY_REQUESTS || named(THROTTLES).is_some() {
+        return None;
+    }
+    if let Some(code) = named(REFUSALS) {
+        return Some(code.to_owned());
+    }
+    let bare = if social {
+        matches!(
+            status,
+            StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        )
+    } else {
+        status == StatusCode::UNAUTHORIZED
+    };
+    bare.then(|| format!("http {}", status.as_u16()))
 }
 
 impl CredentialRefresh for super::Kiro {
@@ -474,7 +594,17 @@ impl CredentialRefresh for super::Kiro {
                 .ok_or_else(|| {
                     ChannelError::RefreshRejected("credential has no refresh token".into())
                 })?;
-            let (url, body) = if is_identity_center(&context.credential) {
+            let social = !is_identity_center(&context.credential);
+            let (url, body) = if !social {
+                // An expired registration cannot redeem anything; asking AWS
+                // only earns an InvalidClient, so the refusal is local.
+                if client_secret_expires_at_ms(&context.credential).is_some_and(|expires| {
+                    expires <= unix_now_ms().saturating_add(EXPIRY_MARGIN_MS)
+                }) {
+                    return Err(ChannelError::RefreshRejected(
+                        "the registered Identity Center client has expired".into(),
+                    ));
+                }
                 let (client_id, client_secret) =
                     own_client(&context.credential).ok_or(ChannelError::InvalidCredential)?;
                 let region = fact(&context.credential, "region")
@@ -495,7 +625,7 @@ impl CredentialRefresh for super::Kiro {
                     json!({ "refreshToken": refresh_token }),
                 )
             };
-            let (status, _, bytes) = send(
+            let (status, reply_headers, bytes) = send(
                 context.client,
                 Method::POST,
                 &url,
@@ -504,7 +634,7 @@ impl CredentialRefresh for super::Kiro {
             )
             .await?;
             if !status.is_success() {
-                if let Some(code) = definitive(status, &bytes) {
+                if let Some(code) = definitive(social, status, &reply_headers, &bytes) {
                     return Err(ChannelError::RefreshRejected(code));
                 }
                 return Err(ChannelError::UpstreamResponse {
@@ -536,6 +666,7 @@ impl CredentialRefresh for super::Kiro {
                 }
             }
             Ok(CredentialUpdate {
+                metadata: None,
                 secret: updated,
                 expires_at_ms: Some(expires_at_ms),
             })
@@ -558,10 +689,12 @@ mod tests {
 
     #[test]
     fn only_a_named_refusal_is_definitive() {
-        assert!(definitive(StatusCode::UNAUTHORIZED, b"").is_some());
+        assert!(definitive(false, StatusCode::UNAUTHORIZED, &HeaderMap::new(), b"").is_some());
         assert_eq!(
             definitive(
+                false,
                 StatusCode::BAD_REQUEST,
+                &HeaderMap::new(),
                 br#"{"__type":"InvalidGrantException"}"#
             )
             .as_deref(),
@@ -569,12 +702,14 @@ mod tests {
         );
         assert!(
             definitive(
+                false,
                 StatusCode::BAD_REQUEST,
+                &HeaderMap::new(),
                 br#"{"__type":"ThrottlingException"}"#
             )
             .is_none()
         );
-        assert!(definitive(StatusCode::BAD_GATEWAY, b"down").is_none());
+        assert!(definitive(false, StatusCode::BAD_GATEWAY, &HeaderMap::new(), b"down").is_none());
     }
 
     #[test]

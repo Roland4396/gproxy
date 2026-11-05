@@ -110,7 +110,6 @@ fn context_for_channel(
         operation_urls: Default::default(),
         rewrite_rule_sets: vec![],
         credential_strategy: old.credential_strategy,
-        session_affinity: false,
         model_credentials: old.model_credentials.clone(),
     });
     ctx.target.upstream_model = Some("claude-fable-5".into());
@@ -125,7 +124,6 @@ fn context_for_channel(
                 label: None,
                 auth_kind: old.auth_kind.clone(),
                 enabled: true,
-                metadata: old.metadata.clone(),
                 client: client.clone(),
                 websocket_client: client.clone(),
                 state: old.state.clone(),

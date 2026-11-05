@@ -23,7 +23,7 @@ use axum::{
 use gproxy_app::{
     AdminScope, Operations,
     dto::{
-        ApiKeyPatch, ApiKeyWrite, AuditQuery, ListQuery, MemberWrite, OAuthClientPatch,
+        ApiKeyPatch, ApiKeyWrite, AuditQuery, BatchItem, ListQuery, MemberWrite, OAuthClientPatch,
         OAuthClientWrite, OrganizationPatch, OrganizationWrite, PermissionPatch, PermissionWrite,
         RateLimitPatch, RateLimitWrite, TeamPatch, TeamWrite, UserPatch, UserWrite,
     },
@@ -102,6 +102,15 @@ where
             collection!(oauth_clients, OAuthClientWrite, "oauth-clients"),
         )
         .route(
+            "/oauth-clients/batch",
+            batch!(
+                oauth_clients,
+                OAuthClientWrite,
+                OAuthClientPatch,
+                "oauth-clients"
+            ),
+        )
+        .route(
             "/oauth-clients/{id}",
             item!(oauth_clients, OAuthClientPatch, "oauth-clients"),
         )
@@ -136,11 +145,13 @@ where
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "documentation", derive(schemars::JsonSchema))]
 struct PasswordBody {
     password: String,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "documentation", derive(schemars::JsonSchema))]
 struct AllowlistBody {
     /// `null` clears the per-user allowlist and falls back to the global one.
     clients: Option<Vec<String>>,
@@ -457,3 +468,9 @@ where
 {
     crate::send(async move { operations!(state, scope, "audit", audit.query(query)) }).await
 }
+
+#[cfg(feature = "documentation")]
+#[path = "identity_docs.rs"]
+mod documentation;
+#[cfg(feature = "documentation")]
+pub(crate) use documentation::document;

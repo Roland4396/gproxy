@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate versioned WinGet manifests from verified Microsoft-signed release MSIX packages."""
+"""Generate versioned WinGet manifests from verified signed release MSIX packages."""
 import argparse
 import base64
 import hashlib
@@ -21,14 +21,14 @@ TEMPLATES = Path('.github/winget/manifests/l/LeenHawk/GPROXY')
 
 
 def gh(*args):
-    return json.loads(subprocess.check_output(['gh', *args], text=True))
+    return json.loads(subprocess.check_output(['gh', *args], encoding='utf-8'))
 
 
 def already_submitted(edition, version):
     path = f'manifests/l/LeenHawk/GPROXY/{edition}'
     result = subprocess.run(
         ['gh', 'api', f'repos/{UPSTREAM}/contents/{path}/{version}/LeenHawk.GPROXY.{edition}.installer.yaml'],
-        capture_output=True, text=True)
+        capture_output=True, encoding='utf-8')
     if result.returncode == 0:
         doc = yaml.safe_load(base64.b64decode(json.loads(result.stdout)['content']))
         if all(entry.get('InstallerType', doc.get('InstallerType')) == 'msix'
@@ -76,11 +76,12 @@ def msix_metadata(path):
         if 'AppxSignature.p7x' not in archive.namelist():
             return None
         manifest = ET.fromstring(archive.read('AppxManifest.xml'))
-    # Presence of a signature is insufficient: Windows must trust Microsoft.
+    # Require a trusted timestamped package signature, whether the release
+    # was signed by SignPath or Microsoft Store.
     subprocess.run(['pwsh', '-NoProfile', '-Command',
         "$s = Get-AuthenticodeSignature -LiteralPath $env:WINGET_MSIX_PATH; "
-        "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch "
-        "'(?:^|,\\s*)O=Microsoft Corporation(?:,|$)') { throw 'MSIX requires a trusted Microsoft signature' }"],
+        "if ($s.Status -ne 'Valid' -or -not $s.TimeStamperCertificate) "
+        "{ throw 'MSIX requires a trusted timestamped signature' }"],
         env={**os.environ, 'WINGET_MSIX_PATH': str(path.resolve())}, check=True)
     ns = {'m': 'http://schemas.microsoft.com/appx/manifest/foundation/windows10'}
     identity = manifest.find('m:Identity', ns).attrib
@@ -91,7 +92,7 @@ def msix_metadata(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--version', required=True)
-    parser.add_argument('--edition', choices=['CLI', 'Desktop'], required=True)
+    parser.add_argument('--edition', choices=['CLI', 'Desktop', 'Headless'], required=True)
     parser.add_argument('--output', type=Path, default=Path('dist/winget'))
     parser.add_argument('--skip-existing', action='store_true')
     args = parser.parse_args()
@@ -107,7 +108,7 @@ def main():
         raise ValueError('WinGet requires a published stable release')
     downloads = args.output / 'downloads' / edition
     downloads.mkdir(parents=True, exist_ok=True)
-    prefix = 'gproxy-tauri' if edition == 'Desktop' else 'gproxy'
+    prefix = {'Desktop': 'gproxy-tauri', 'CLI': 'gproxy', 'Headless': 'gproxy-headless'}[edition]
     names = [f'{prefix}-windows-{arch}.msix' for arch in ('x86_64', 'aarch64')]
     command = ['gh', 'release', 'download', f'v{version}', '--repo', REPO,
                '--dir', str(downloads), '--clobber']
@@ -116,17 +117,25 @@ def main():
     subprocess.run(command, check=True)
     checksums = dict((name.lstrip('*'), digest) for digest, name in
                      (line.split(maxsplit=1) for line in
-                      (downloads / 'SHA256SUMS').read_text().splitlines() if line.strip()))
+                      (downloads / 'SHA256SUMS').read_text(encoding='utf-8').splitlines() if line.strip()))
     packages = {}
     for name in names:
         digest = verify_zip(downloads / name, checksums[name], 'AppxManifest.xml')
         metadata = msix_metadata(downloads / name)
         if metadata is None:
-            print(f'{edition} {version}: waiting for Microsoft Store signing.')
+            print(f'{edition} {version}: unsigned MSIX; skipping WinGet submission.')
             return
         identity, minimum = metadata
+        if edition == 'Headless':
+            with zipfile.ZipFile(downloads / name) as archive:
+                manifest = ET.fromstring(archive.read('AppxManifest.xml'))
+                aliases = manifest.findall('.//{http://schemas.microsoft.com/appx/manifest/uap/windows10/5}ExecutionAlias')
+                if [alias.get('Alias') for alias in aliases] != ['gproxy-headless.exe']:
+                    raise ValueError(f'Headless MSIX must expose only gproxy-headless.exe: {name}')
+                if 'gproxy.exe' not in archive.namelist():
+                    raise ValueError(f'Headless MSIX is missing gproxy.exe: {name}')
         arch = 'x64' if name.endswith('-x86_64.msix') else 'arm64'
-        expected_name = 'LeenHawk.GPROXYGateway' if edition == 'Desktop' else 'LeenHawk.GPROXYCLI'
+        expected_name = {'Desktop': 'LeenHawk.GPROXYGateway', 'CLI': 'LeenHawk.GPROXYCLI', 'Headless': 'LeenHawk.GPROXYHeadless'}[edition]
         if (identity['Name'] != expected_name or identity['Version'] != version + '.0'
                 or identity['ProcessorArchitecture'] != arch):
             raise ValueError(f'MSIX identity/version/architecture mismatch: {name}')
@@ -134,7 +143,8 @@ def main():
                               InstallerSha256=digest, PackageFamilyName=package_family(identity), MinimumOSVersion=minimum)
     destination = args.output / 'manifests' / edition
     destination.mkdir(parents=True, exist_ok=True)
-    for template in sorted((TEMPLATES / edition / '4.0.0').glob('*.yaml')):
+    templates = Path('.github/winget/templates/Headless') if edition == 'Headless' else TEMPLATES / edition / '4.0.0'
+    for template in sorted(templates.glob('*.yaml')):
         doc = yaml.safe_load(template.read_text(encoding='utf-8'))
         doc['PackageVersion'] = version
         if 'ReleaseNotesUrl' in doc:

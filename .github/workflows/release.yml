@@ -1,8 +1,7 @@
 name: Release
 
-on:
+'on':
   workflow_dispatch: null
-
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
@@ -11,10 +10,39 @@ permissions:
   contents: write
   packages: write
 
+env:
+  # dtolnay/rust-toolchain retries only checksum errors; rustup retries network ones.
+  RUSTUP_MAX_RETRIES: 10
+
 jobs:
+  gate:
+    name: Not published by a stable tag
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - id: gate
+        env:
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          # A stable tag's run publishes release and beta for its commit, and
+          # scripts/release.sh pushes main and the tag atomically, so main's
+          # run for a tagged commit would only publish beta a second time.
+          run=true
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ] &&
+            git ls-remote "https://github.com/$REPOSITORY.git" 'refs/tags/v*' |
+              awk -v sha="$SHA" '$1 == sha { print $2 }' |
+              grep -Eq '^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(\^\{\})?$'; then
+            run=false
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   prepare:
     name: Release metadata
-    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.metadata.outputs.matrix }}
       headless_matrix: ${{ steps.metadata.outputs.headless_matrix }}
@@ -40,7 +68,7 @@ jobs:
           python3 scripts/release-context.py --validate | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_OUTPUT"
           # CLI and Application get separate runners and caches, including
           # their independent LTO links and best-compression packaging.
-          echo "matrix=$(jq -c '{include: [.include[] | select(.os != "ohos") | if (.target | startswith("riscv64gc-")) then select(.application_builder == "cargo-alpine") | . + {kind:"application",builder:.application_builder} elif .application_artifact then . + {kind:"cli"}, . + {kind:"application"} else . + {kind:"cli"} end]}' scripts/release-targets.json)" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c '{include: [.include[] | select(.os != "ohos") | if (.target | startswith("riscv64gc-")) then select(.application_builder == "cargo-alpine") | . + {kind:"application",builder:.application_builder} elif .os == "android" then . + {kind:"cli"} elif .application_artifact then . + {kind:"cli"}, . + {kind:"application"} else . + {kind:"cli"} end]}' scripts/release-targets.json)" >> "$GITHUB_OUTPUT"
           echo "headless_matrix=$(jq -c '{include: [.include[] | select(.headless_artifact) | select(.target | startswith("riscv64gc-") | not)]}' scripts/release-targets.json)" >> "$GITHUB_OUTPUT"
           echo "headless_riscv_matrix=$(jq -c '{include: [.include[] | select(.headless_artifact) | select(.target | startswith("riscv64gc-"))]}' scripts/release-targets.json)" >> "$GITHUB_OUTPUT"
           echo "riscv_matrix=$(jq -c '{include: [.include[] | select(.target | startswith("riscv64gc-")) | if .application_artifact and .application_builder != "cargo-alpine" then . + {kind:"cli"}, . + {kind:"application"} else . + {kind:"cli"} end]}' scripts/release-targets.json)" >> "$GITHUB_OUTPUT"
@@ -50,7 +78,7 @@ jobs:
   console:
     name: Console bundle
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: console
@@ -59,7 +87,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: console/package.json
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
           cache: pnpm
@@ -68,7 +96,7 @@ jobs:
       - run: python3 ../scripts/reproducible-run.py pnpm build
         env:
           GPROXY_BUILD_HASH: ${{ github.sha }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: console-dist
           path: console/dist
@@ -107,7 +135,7 @@ jobs:
       - name: Free disk for Termux builder
         if: matrix.kind == 'cli' && matrix.os == 'android'
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: matrix.kind != 'cli' || matrix.os != 'android'
         with:
           name: console-dist
@@ -119,7 +147,7 @@ jobs:
         if: matrix.kind == 'application'
         with:
           package_json_file: console/package.json
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: matrix.kind == 'application'
         with:
           node-version: '24.21.0'
@@ -138,30 +166,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libdbus-1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - name: Set up Java
-        if: matrix.kind == 'application' && matrix.os == 'android'
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: gradle
-          cache-dependency-path: |
-            crates/gproxy-host-tauri/gen/android/**/*.gradle*
-            crates/gproxy-host-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
-      - if: matrix.kind == 'application' && matrix.os == 'android'
-        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-      - name: Install Android toolchain
-        if: matrix.kind == 'application' && matrix.os == 'android'
-        run: |
-          sdkmanager 'platforms;android-36' 'build-tools;36.1.0' 'build-tools;34.0.0' 'ndk;30.0.15729638'
-          echo "NDK_HOME=$ANDROID_HOME/ndk/30.0.15729638" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.15729638" >> "$GITHUB_ENV"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: matrix.builder != 'cargo-alpine' && (matrix.kind != 'cli' || matrix.os != 'android')
         with:
           go-version: "1.27.1"
           cache: false
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # 1.99.0
         if: matrix.builder != 'cargo-alpine' && (matrix.kind != 'cli' || matrix.os != 'android')
         with:
           toolchain: 1.99.0
@@ -172,8 +182,6 @@ jobs:
           key: packages-${{ matrix.target }}-${{ matrix.kind }}
           restore-key: packages-${{ matrix.target }}
           token: ${{ secrets.GITHUB_TOKEN }}
-      - if: matrix.kind == 'application' && matrix.os == 'android'
-        run: cargo install cargo-ndk --locked
       - name: Configure native Windows ARM64 dependencies
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: bash
@@ -199,30 +207,14 @@ jobs:
             cargo-alpine) scripts/build-musl.sh "${{ matrix.target }}" ;;
             termux) bash scripts/build-termux.sh "${{ matrix.target }}" ;;
           esac
-      - name: Stage container binary
-        if: ${{ matrix.kind == 'cli' && matrix.os == 'linux' }}
-        run: |
-          mkdir -p container-binary
-          cp "target/${{ matrix.target }}/release/gproxy" container-binary/gproxy
-      - name: Upload container binary
-        if: ${{ matrix.kind == 'cli' && matrix.os == 'linux' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: container-bin-${{ matrix.target }}
-          path: container-binary/gproxy
-          retention-days: 1
       - name: Codesign binary
         if: ${{ matrix.kind == 'cli' && matrix.os == 'macos' }}
         run: codesign --force --sign - "target/${{ matrix.target }}/release/gproxy"
       - name: Install pinned UPX
-        if: ${{ matrix.upx && matrix.target != 'aarch64-pc-windows-msvc' }}
+        if: ${{ matrix.upx }}
         env:
           UPX_VERSION: ${{ matrix.upx_version }}
         run: scripts/install-upx.sh
-      - name: Install UPX with ARM64 TLS and loader fixes
-        if: matrix.upx && matrix.target == 'aarch64-pc-windows-msvc'
-        shell: pwsh
-        run: scripts/install-windows-arm64-upx.ps1
       - name: Pack and run Windows executable
         if: ${{ matrix.kind == 'cli' && matrix.upx && matrix.os == 'windows' }}
         shell: pwsh
@@ -254,6 +246,18 @@ jobs:
           binary="target/${{ matrix.target }}/release/gproxy${{ matrix.os == 'windows' && '.exe' || '' }}"
           "$binary" --version
           "$binary" --help > "$RUNNER_TEMP/gproxy-release-help.txt"
+      - name: Stage container binary
+        if: ${{ matrix.kind == 'cli' && matrix.os == 'linux' }}
+        run: |
+          mkdir -p container-binary
+          cp "target/${{ matrix.target }}/release/gproxy" container-binary/gproxy
+      - name: Upload container binary
+        if: ${{ matrix.kind == 'cli' && matrix.os == 'linux' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-bin-${{ matrix.target }}
+          path: container-binary/gproxy
+          retention-days: 1
       - name: Package Unix archive
         if: ${{ matrix.kind == 'cli' && matrix.os != 'windows' }}
         env:
@@ -272,7 +276,7 @@ jobs:
           target: ${{ matrix.target }}
           artifact: ${{ matrix.artifact }}
           version: ${{ needs.prepare.outputs.version }}
-          sign: ${{ vars.SIGNPATH_ENABLED == 'true' && github.ref_type == 'tag' }}
+          sign: ${{ vars.SIGNPATH_ENABLED == 'true' }}
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
@@ -292,12 +296,27 @@ jobs:
           ./scripts/package-windows-msix.ps1 -Target '${{ matrix.target }}' -Artifact '${{ matrix.artifact }}' -Version '${{ needs.prepare.outputs.version }}' -Mode cli -OutputDir dist/release
       - name: Preserve CLI Store submission
         if: matrix.kind == 'cli' && matrix.os == 'windows' && needs.prepare.outputs.channel == 'release'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: microsoft-store-unsigned-${{ matrix.artifact }}
           path: dist/release/${{ matrix.artifact }}.msix
           if-no-files-found: error
           retention-days: 30
+      - name: Sign Windows cli MSIX
+        if: matrix.kind == 'cli' && matrix.os == 'windows' && vars.SIGNPATH_ENABLED == 'true'
+        uses: ./.github/actions/windows-msix-sign
+        with:
+          target: ${{ matrix.target }}
+          artifact: ${{ matrix.artifact }}
+          version: ${{ needs.prepare.outputs.version }}
+          mode: cli
+          identity-name: ${{ vars.MS_STORE_CLI_IDENTITY_NAME }}
+          display-name: ${{ vars.MS_STORE_CLI_DISPLAY_NAME }}
+          publisher: ${{ vars.SIGNPATH_MSIX_PUBLISHER }}
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
       - name: Record build provenance
         if: matrix.kind == 'cli'
         env:
@@ -312,7 +331,7 @@ jobs:
         uses: ./.github/actions/attest-release
         with:
           artifact: ${{ matrix.artifact }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.kind == 'cli'
         with:
           name: native-${{ matrix.target }}
@@ -328,9 +347,6 @@ jobs:
             dist/release/${{ matrix.artifact }}.msix.sha256
           retention-days: 1
 
-      - name: Install Android shared-library UPX fix
-        if: matrix.kind == 'application' && matrix.os == 'android'
-        run: scripts/install-android-upx.sh
       - name: Build application installer
         if: matrix.kind == 'application'
         env:
@@ -356,12 +372,27 @@ jobs:
         run: scripts/package-tauri-release.sh
       - name: Preserve Store submission
         if: matrix.kind == 'application' && matrix.os == 'windows' && needs.prepare.outputs.channel == 'release'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: microsoft-store-unsigned-${{ matrix.application_artifact }}
           path: dist/release/${{ matrix.application_artifact }}.msix
           if-no-files-found: error
           retention-days: 30
+      - name: Sign Windows application MSIX
+        if: matrix.kind == 'application' && matrix.os == 'windows' && vars.SIGNPATH_ENABLED == 'true'
+        uses: ./.github/actions/windows-msix-sign
+        with:
+          target: ${{ matrix.target }}
+          artifact: ${{ matrix.application_artifact }}
+          version: ${{ needs.prepare.outputs.version }}
+          mode: application
+          identity-name: ${{ vars.MS_STORE_IDENTITY_NAME }}
+          display-name: ${{ vars.MS_STORE_DISPLAY_NAME }}
+          publisher: ${{ vars.SIGNPATH_MSIX_PUBLISHER }}
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
       - name: Record application build provenance
         if: matrix.kind == 'application'
         env:
@@ -375,7 +406,7 @@ jobs:
         if: matrix.kind == 'application'
         with:
           artifact: ${{ matrix.application_artifact }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.kind == 'application'
         with:
           name: application-${{ matrix.target }}
@@ -385,14 +416,16 @@ jobs:
 
   riscv-toolchain:
     name: RISC-V cross toolchain
-    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -412,7 +445,9 @@ jobs:
     concurrency:
       group: gproxy-ohos-toolchain
       cancel-in-progress: false
-    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -422,7 +457,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -451,7 +486,7 @@ jobs:
   ohos-cli:
     name: OpenHarmony CLI (${{ matrix.target }})
     needs: [prepare, console, ohos-toolchain]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 90
     permissions:
@@ -488,7 +523,7 @@ jobs:
         run: |
           git config --global --add safe.directory "$PWD"
           test "$(cat .gitlab/update-public-key)" = "$GPROXY_UPDATE_PUBKEY"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: console-dist
           path: console/dist
@@ -501,7 +536,7 @@ jobs:
       - uses: ./.github/actions/attest-release
         with:
           artifact: ${{ matrix.artifact }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-${{ matrix.target }}
           path: dist/release/${{ matrix.artifact }}.*
@@ -511,7 +546,7 @@ jobs:
   ohos-application:
     name: Experimental HarmonyOS HAP (${{ matrix.target }})
     needs: [prepare, console, ohos-toolchain]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 120
     permissions:
@@ -548,7 +583,7 @@ jobs:
         run: |
           git config --global --add safe.directory "$PWD"
           test "$(cat .gitlab/update-public-key)" = "$GPROXY_UPDATE_PUBKEY"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: console-dist
           path: console/dist
@@ -562,7 +597,7 @@ jobs:
       - uses: ./.github/actions/attest-release
         with:
           artifact: ${{ matrix.application_artifact }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: application-${{ matrix.target }}
           path: dist/release/${{ matrix.application_artifact }}.*
@@ -572,7 +607,7 @@ jobs:
   riscv:
     name: ${{ matrix.kind == 'cli' && 'CLI' || 'Application' }} (${{ matrix.target }})
     needs: [prepare, console, riscv-toolchain]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     container:
       image: ghcr.io/leenhawk/gproxy-build-riscv64:${{ github.sha }}
@@ -605,7 +640,7 @@ jobs:
         env:
           GPROXY_UPDATE_PUBKEY: ${{ secrets.UPDATE_SIGNING_PUBLIC_KEY_B64 }}
         run: test "$(cat .gitlab/update-public-key)" = "$GPROXY_UPDATE_PUBKEY"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: console-dist
           path: console/dist
@@ -618,7 +653,7 @@ jobs:
       - name: Build, compress and run CLI with QEMU
         if: matrix.kind == 'cli'
         run: CI_PROJECT_DIR="$PWD" bash scripts/gitlab/package-cross.sh cli
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.kind == 'cli'
         with:
           name: container-bin-${{ matrix.target }}
@@ -629,7 +664,7 @@ jobs:
         if: matrix.kind == 'cli'
         with:
           artifact: ${{ matrix.artifact }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.kind == 'cli'
         with:
           name: native-${{ matrix.target }}
@@ -643,7 +678,7 @@ jobs:
         if: matrix.kind == 'application'
         with:
           artifact: ${{ matrix.application_artifact }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.kind == 'application'
         with:
           name: application-${{ matrix.target }}
@@ -661,7 +696,7 @@ jobs:
         include:
           - variant: gnu
             arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             suffix: ""
             runtime_base: gcr.io/distroless/cc-debian13
@@ -673,13 +708,13 @@ jobs:
             runtime_base: gcr.io/distroless/cc-debian13
           - variant: gnu
             arch: riscv64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             target: riscv64gc-unknown-linux-gnu
             suffix: ""
             runtime_base: gcr.io/distroless/cc-debian13
           - variant: musl
             arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             suffix: -musl
             runtime_base: gcr.io/distroless/static-debian13
@@ -691,13 +726,13 @@ jobs:
             runtime_base: gcr.io/distroless/static-debian13
           - variant: musl
             arch: riscv64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             target: riscv64gc-unknown-linux-musl
             suffix: -musl
             runtime_base: gcr.io/distroless/static-debian13
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: container-bin-${{ matrix.target }}
           path: dist
@@ -705,7 +740,7 @@ jobs:
           chmod +x dist/gproxy
           mkdir -p dist/data
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -735,10 +770,10 @@ jobs:
     outputs:
       source: ${{ steps.images.outputs.source }}
     needs: container
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -758,11 +793,11 @@ jobs:
     if: github.ref_type == 'tag'
     name: Publish crates.io libraries
     needs: [prepare, native, riscv]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # 1.99.0
         with:
           toolchain: 1.99.0
       - uses: ./.github/actions/ghcr-rust-cache
@@ -816,7 +851,7 @@ jobs:
         with:
           go-version: "1.27.1"
           cache: false
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # 1.99.0
         if: matrix.os != 'android' && matrix.builder != 'cargo-alpine'
         with:
           toolchain: 1.99.0
@@ -840,18 +875,14 @@ jobs:
             android) bash scripts/build-termux.sh "$TARGET_TRIPLE" ;;
             windows) pwsh -NoProfile -File scripts/build-windows-release.ps1 -Target "$TARGET_TRIPLE" -Headless ;;
             *) python3 scripts/reproducible-run.py cargo build --locked --release -p gproxy --bin gproxy --target "$TARGET_TRIPLE" \
-                 --no-default-features --features channels,memory,fs,bundled-vocabulary ;;
+                 --no-default-features --features channels,memory,fs,bundled-vocabulary,postgres,mysql ;;
           esac
       - name: Codesign macOS binary
         if: matrix.os == 'macos'
         run: codesign --force --sign - "target/$TARGET_TRIPLE/release/gproxy"
       - name: Install UPX
-        if: matrix.upx && matrix.target != 'aarch64-pc-windows-msvc'
+        if: matrix.upx
         run: bash scripts/install-upx.sh
-      - name: Install UPX with ARM64 TLS and loader fixes
-        if: matrix.upx && matrix.target == 'aarch64-pc-windows-msvc'
-        shell: pwsh
-        run: scripts/install-windows-arm64-upx.ps1
       - name: Compress Windows executable
         if: matrix.upx && matrix.os == 'windows'
         shell: pwsh
@@ -862,7 +893,8 @@ jobs:
       - name: Package Unix archive
         if: matrix.os != 'windows'
         env:
-          PACKAGE_INSTALLERS: 'false'
+          # Android also gets a Termux .deb; other headless installers are separate.
+          PACKAGE_INSTALLERS: ${{ matrix.os == 'android' }}
         run: bash scripts/package-native-release.sh
       - name: Package and sign Windows release
         if: matrix.os == 'windows'
@@ -871,7 +903,32 @@ jobs:
           target: ${{ matrix.target }}
           artifact: ${{ matrix.headless_artifact }}
           version: ${{ needs.prepare.outputs.version }}
-          sign: ${{ vars.SIGNPATH_ENABLED == 'true' && github.ref_type == 'tag' }}
+          sign: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      - name: Package Windows Headless MSIX
+        if: matrix.os == 'windows'
+        shell: pwsh
+        env:
+          MS_STORE_IDENTITY_PUBLISHER: ${{ vars.MS_STORE_IDENTITY_PUBLISHER }}
+          MS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MS_STORE_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          Expand-Archive -Path "dist/release/${{ matrix.headless_artifact }}.zip" -DestinationPath "$env:RUNNER_TEMP/headless-msix" -Force
+          Copy-Item "$env:RUNNER_TEMP/headless-msix/gproxy.exe" "target/${{ matrix.target }}/release/gproxy.exe" -Force
+          ./scripts/package-windows-msix.ps1 -Target '${{ matrix.target }}' -Artifact '${{ matrix.headless_artifact }}' -Version '${{ needs.prepare.outputs.version }}' -Mode headless -OutputDir dist/release
+      - name: Sign Windows Headless MSIX
+        if: matrix.os == 'windows' && vars.SIGNPATH_ENABLED == 'true'
+        uses: ./.github/actions/windows-msix-sign
+        with:
+          target: ${{ matrix.target }}
+          artifact: ${{ matrix.headless_artifact }}
+          version: ${{ needs.prepare.outputs.version }}
+          mode: headless
+          identity-name: LeenHawk.GPROXYHeadless
+          display-name: GPROXY Headless
+          publisher: ${{ vars.SIGNPATH_MSIX_PUBLISHER }}
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
@@ -880,7 +937,7 @@ jobs:
       - uses: ./.github/actions/attest-release
         with:
           artifact: ${{ env.ARTIFACT_NAME }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: headless-${{ matrix.target }}
           path: dist/release/${{ env.ARTIFACT_NAME }}.*
@@ -890,7 +947,7 @@ jobs:
   headless-riscv:
     name: Headless CLI (${{ matrix.target }})
     needs: [prepare, riscv-toolchain]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     container:
       image: ghcr.io/leenhawk/gproxy-build-riscv64:${{ github.sha }}
@@ -931,7 +988,7 @@ jobs:
       - uses: ./.github/actions/attest-release
         with:
           artifact: ${{ matrix.headless_artifact }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: headless-${{ matrix.target }}
           path: dist/release/${{ matrix.headless_artifact }}.*
@@ -953,7 +1010,7 @@ jobs:
         include:
           - arch: x86_64
             target: x86_64-unknown-linux-musl
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: aarch64
             target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
@@ -966,7 +1023,7 @@ jobs:
       UPX_ENABLED: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: console-dist
           path: crates/gproxy-host-axum/assets/web
@@ -983,7 +1040,7 @@ jobs:
       - uses: ./.github/actions/attest-release
         with:
           artifact: ${{ env.ARTIFACT_NAME }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: serverless-${{ matrix.target }}
           path: dist/release/${{ env.ARTIFACT_NAME }}.*
@@ -993,7 +1050,7 @@ jobs:
   edge:
     name: Edge bundles
     needs: [prepare, console]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -1001,11 +1058,11 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: console-dist
           path: console/dist
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # 1.99.0
         with:
           toolchain: 1.99.0
           targets: wasm32-unknown-unknown
@@ -1016,7 +1073,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: console/package.json
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
           cache: pnpm
@@ -1036,7 +1093,7 @@ jobs:
         uses: ./.github/actions/attest-release
         with:
           artifact: gproxy-edge
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: edge-bundles
           path: |
@@ -1050,7 +1107,7 @@ jobs:
   edge-check:
     name: Edge bundle check
     needs: edge
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # `wrangler deploy --dry-run` validates the packaged Worker and its
     # configuration without an account. It installs the locked Wrangler in a
     # separate job, apart from the attestation token and from the
@@ -1058,14 +1115,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: edge-bundles
           path: dist/release
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 9
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+          version: 9.15.9
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
       - name: Dry-run the Cloudflare deployment
@@ -1076,69 +1133,179 @@ jobs:
           pnpm --dir "$work/cloudflare" install --frozen-lockfile --ignore-scripts
           pnpm --dir "$work/cloudflare" check
 
-  fdroid:
-    name: Signed F-Droid reference APK
+  android-toolchain:
+    name: Shared Android toolchain
     needs: prepare
-    if: needs.prepare.outputs.channel == 'release'
     runs-on: ubuntu-24.04
-    environment: release
-    env:
-      CONTAINER: android
-      CARGO_BUILD_JOBS: '2'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.reference.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Free disk for the Android toolchain
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          python-version: '3.13'
-      - name: Rebuild F-Droid packages at fixed paths
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: .gitlab/Dockerfile.android
+          push: true
+          tags: ghcr.io/leenhawk/gproxy-build-android:${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/leenhawk/gproxy-build-android:buildcache
+          cache-to: type=registry,ref=ghcr.io/leenhawk/gproxy-build-android:buildcache,mode=max
+      - id: reference
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: echo "image=ghcr.io/leenhawk/gproxy-build-android@$DIGEST" >> "$GITHUB_OUTPUT"
+
+  android-build:
+    name: Android ${{ matrix.distribution }} (${{ matrix.arch }})
+    needs: [prepare, console, android-toolchain]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        distribution: [direct, fdroid, google-play]
+        arch: [aarch64, x86_64]
+    env:
+      CARGO_HOME: /tmp/gproxy-reproduce/cargo
+      CARGO_TARGET_DIR: /tmp/gproxy-reproduce/source/target
+      GRADLE_USER_HOME: /tmp/gproxy-reproduce/gradle
+      CARGO_BUILD_JOBS: '2'
+      GPROXY_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      GPROXY_BUILD_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      GPROXY_BUILD_HASH: ${{ github.sha }}
+      SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+      ANDROID_TOOLCHAIN_IMAGE: ${{ needs.android-toolchain.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free disk for the Android container and native cache
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: console-dist
+          path: console/dist
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/ghcr-rust-cache
+        with:
+          key: android-${{ matrix.distribution }}-${{ matrix.arch }}
+          restore-key: android-applications-universal
+          token: ${{ secrets.GITHUB_TOKEN }}
+          save: 'true'
+      - name: Build one channel and ABI
+        env:
+          DISTRIBUTION: ${{ matrix.distribution }}
+          ARCH: ${{ matrix.arch }}
+          GPROXY_UPDATE_PUBKEY: ${{ secrets.UPDATE_SIGNING_PUBLIC_KEY_B64 }}
         run: |
-          docker build -f .gitlab/Dockerfile.android -t gproxy-reproduce-tools .
-          python3 scripts/reproduce-build.py --result dist/reproducible -- "$(command -v bash)" scripts/reproduce-dispatch.sh aarch64-linux-android store-fdroid
-      - name: Install signature tools
-        run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;34.0.0'
-          python3 -m pip install apksigcopier==1.1.1
-      - name: Sign and verify the reference APK
+          test -n "$GPROXY_UPDATE_PUBKEY"
+          bash scripts/mobile/run-android-container.sh build "$DISTRIBUTION" "$ARCH"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-build-${{ matrix.distribution }}-${{ matrix.arch }}
+          path: dist/android-build/
+          compression-level: 1
+          if-no-files-found: error
+          retention-days: 1
+
+  android-packages:
+    name: Assemble and sign Android packages (no Rust compilation)
+    needs: [prepare, console, android-toolchain, android-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      CARGO_HOME: /tmp/gproxy-reproduce/cargo
+      CARGO_TARGET_DIR: /tmp/gproxy-reproduce/source/target
+      GRADLE_USER_HOME: /tmp/gproxy-reproduce/gradle
+      CARGO_BUILD_JOBS: '2'
+      GPROXY_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      GPROXY_BUILD_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      GPROXY_BUILD_HASH: ${{ github.sha }}
+      SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+      ANDROID_TOOLCHAIN_IMAGE: ${{ needs.android-toolchain.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free disk for the Android container and native cache
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: console-dist
+          path: console/dist
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/ghcr-rust-cache
+        with:
+          key: android-package-inputs
+          token: ${{ secrets.GITHUB_TOKEN }}
+          save: 'true'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: android-build-*
+          path: dist/android-build
+          merge-multiple: true
+      - name: Assemble universal store packages and sign release outputs
         env:
           ANDROID_SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
           ANDROID_SIGNING_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEYSTORE_PASSWORD }}
           ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
           ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
-          mkdir -p dist/release
-          printf '%s' "$ANDROID_SIGNING_KEYSTORE_B64" | base64 -d > "$work/key.jks"
-          chmod 600 "$work/key.jks"
-          signer="$ANDROID_HOME/build-tools/34.0.0/apksigner"
-          # minSdk 28 uses v3; omit v1 ZIP entries that apksigcopier cannot
-          # reproduce with Python 3.13.15 filename-flag normalization.
-          options=(--ks "$work/key.jks" --ks-pass env:ANDROID_SIGNING_KEYSTORE_PASSWORD --ks-key-alias "$ANDROID_SIGNING_KEY_ALIAS" --v1-signing-enabled false --v4-signing-enabled false)
-          if [ -n "$ANDROID_SIGNING_KEY_PASSWORD" ]; then options+=(--key-pass env:ANDROID_SIGNING_KEY_PASSWORD); fi
-          "$signer" sign "${options[@]}" --out dist/release/gproxy-fdroid-aarch64.apk dist/reproducible/first/gproxy-fdroid-aarch64.apk
-          python3 scripts/mobile/verify-reproducible-apk.py dist/release/gproxy-fdroid-aarch64.apk dist/reproducible/second/gproxy-fdroid-aarch64.apk \
-            --build-tools "$ANDROID_HOME/build-tools/34.0.0" --expected-cert-sha256 80b7795d2d557bad6fba2a956771c91f77f1ceef5e2b536e45eee314a74eed1c \
-            --report dist/reproducible/signature-report.json
-          (cd dist/release && sha256sum gproxy-fdroid-aarch64.apk > gproxy-fdroid-aarch64.apk.sha256)
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          GOOGLE_PLAY_UPLOAD_KEYSTORE_B64: ${{ secrets.GOOGLE_PLAY_UPLOAD_KEYSTORE_B64 }}
+          GOOGLE_PLAY_UPLOAD_STORE_PASSWORD: ${{ secrets.GOOGLE_PLAY_UPLOAD_STORE_PASSWORD }}
+          GOOGLE_PLAY_UPLOAD_KEY_ALIAS: ${{ secrets.GOOGLE_PLAY_UPLOAD_KEY_ALIAS }}
+          GOOGLE_PLAY_UPLOAD_KEY_PASSWORD: ${{ secrets.GOOGLE_PLAY_UPLOAD_KEY_PASSWORD }}
+        run: bash scripts/mobile/run-android-container.sh package dist/android-build
+      - uses: ./.github/actions/attest-release
         with:
-          name: application-fdroid-aarch64
+          artifact: gproxy-tauri-android-aarch64
+      - uses: ./.github/actions/attest-release
+        with:
+          artifact: gproxy-tauri-android-x86_64
+      - uses: ./.github/actions/attest-release
+        with:
+          artifact: gproxy-fdroid-universal
+      - uses: ./.github/actions/attest-release
+        with:
+          artifact: gproxy-google-play-universal
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: application-android
           path: dist/release/
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: fdroid-release-verification
-          path: dist/reproducible/*report.json
+          retention-days: 1
 
   publish:
-    if: ${{ always() && !failure() && !cancelled() }}
+    if: ${{ always() && !failure() && !cancelled() && needs.prepare.result == 'success' }}
     name: Publish GitHub, GitLab and CNB releases
     env:
       GPROXY_CONTAINER_SOURCE: ${{ needs.container-manifest.outputs.source }}
-    needs: [prepare, native, riscv, ohos-cli, ohos-application, headless, headless-riscv, alpine-packages, serverless, edge, edge-check, container-manifest, publish-crates, fdroid]
-    runs-on: ubuntu-latest
+    needs: [prepare, native, riscv, ohos-cli, ohos-application, headless, headless-riscv, alpine-packages, serverless, edge, edge-check, container-manifest, publish-crates, android-packages]
+    runs-on: ubuntu-24.04
     concurrency:
       group: gproxy-release-publication
       cancel-in-progress: false
@@ -1147,31 +1314,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: native-*
           path: dist/release
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: edge-bundles
           path: dist/release
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: headless-*
           path: dist/release
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: serverless-*
           path: dist/release
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: application-*
           path: dist/release
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: alpine-cli-packages
           path: dist/release
@@ -1190,11 +1357,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: bash scripts/github/publish-dockerhub.sh
+      - name: Publish Docker Hub images to org
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_IMAGE: gproxy2/gproxy
+        run: bash scripts/github/publish-dockerhub.sh
 
   alpine-packages:
     name: Signed Alpine CLI packages
     needs: [prepare, native, riscv, headless, headless-riscv]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     permissions:
       contents: read
@@ -1202,12 +1375,12 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: native-*-musl
           path: dist/alpine-input
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: headless-*-musl
           path: dist/alpine-input
@@ -1220,7 +1393,7 @@ jobs:
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/release/*.apk
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: alpine-cli-packages
           path: |
@@ -1256,17 +1429,17 @@ jobs:
 
   cache-cleanup:
     name: Clean old GHCR build caches
-    needs: [native, riscv, ohos-cli, ohos-application, headless, headless-riscv, serverless, edge]
-    if: ${{ always() && !cancelled() && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') }}
-    runs-on: ubuntu-latest
+    needs: [gate, native, riscv, ohos-cli, ohos-application, headless, headless-riscv, serverless, edge, android-build, android-packages]
+    if: ${{ always() && !cancelled() && needs.gate.outputs.run == 'true' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version: '24.21.0'
       - name: Delete untagged cache versions older than seven days
         continue-on-error: true
         env:

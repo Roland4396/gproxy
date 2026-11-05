@@ -579,7 +579,7 @@ fn the_body_becomes_bedrocks_invoke_envelope() {
         panic!("a signed Bedrock body is always buffered")
     };
     let body: Value = serde_json::from_slice(body).unwrap();
-    assert_eq!(body["anthropic_version"], "bedrock-2023-05-31");
+    assert_eq!(body["anthropic_version"], "2026-10-21");
     assert!(body.get("model").is_none(), "the model moved into the URL");
     assert!(body.get("stream").is_none(), "the path implies streaming");
     assert_eq!(body["anthropic_beta"], json!(["a-beta", "b-beta"]));
@@ -1020,8 +1020,24 @@ fn the_buffered_invoke_reply_is_already_a_messages_body() {
     assert_eq!(usage.tokens.input_tokens, Some(12));
     assert_eq!(usage.tokens.output_tokens, Some(5));
     assert_eq!(usage.tokens.cached_input_tokens, Some(3));
-    assert_eq!(usage.tokens.cache_creation_5m_tokens, Some(2));
-    assert_eq!(usage.tokens.cache_creation_1h_tokens, Some(1));
+    assert_eq!(
+        usage
+            .tokens
+            .cache_creation
+            .iter()
+            .find(|entry| entry.ttl_seconds == Some(300))
+            .map(|entry| entry.tokens),
+        Some(2)
+    );
+    assert_eq!(
+        usage
+            .tokens
+            .cache_creation
+            .iter()
+            .find(|entry| entry.ttl_seconds == Some(3600))
+            .map(|entry| entry.tokens),
+        Some(1)
+    );
 }
 
 // ------------------------------------------------------------------- models

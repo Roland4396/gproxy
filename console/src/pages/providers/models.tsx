@@ -7,12 +7,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { providerModels } from "@/api/configuration"
-import { testModel } from "@/api/models"
+import { directory, testModel } from "@/api/models"
 import { ApiError } from "@/api/client"
 import type { ProviderDto, ProviderModelDto } from "@/generated/sdk"
 import { object } from "@/components/providers/provider-model-state"
 import { readVariants, saveVariantRules, variantRules, variantSetId } from "@/components/providers/provider-model-variant-rules"
-import { ruleSets } from "@/api/routing-rules"
+import { bindings, ruleSets } from "@/api/routing-rules"
 import { DataTable, Pagination } from "@/components/data-table"
 import { ConfirmButton } from "@/components/confirm"
 import { EmptyNotice, ErrorNotice, QueryState } from "@/components/state"
@@ -47,7 +47,10 @@ export function ProviderModels({ provider }: { provider: ProviderDto }) {
   }, onSuccess: async () => { setEditing(null); await refresh(); toast.success(t("toast.saved")) }, onError: () => { void refresh() } })
   const toggle = useMutation({ mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => providerModels.update(id, { enabled }), onSuccess: refresh })
   const cleanupVariants = async (ids: string[]) => {
-    for (const id of ids) try { await ruleSets.remove(variantSetId(id)) } catch (error) { if (!(error instanceof ApiError && error.status === 404)) throw error }
+    // Every variant set is bound to its provider, so the bindings name the ones that exist.
+    const doomed = new Set(ids.map(variantSetId))
+    const sets = [...new Set((await directory(bindings, { providerId: provider.id })).map(binding => binding.ruleSetId).filter(id => doomed.has(id)))]
+    if (sets.length) await ruleSets.batch(sets.map(id => ({ delete: id })))
   }
   const remove = useMutation({ mutationFn: async (id: string) => { await providerModels.remove(id); await cleanupVariants([id]) }, onSuccess: refresh })
   const probe = useMutation({ mutationFn: (model: string) => testModel(provider.id, model, credentialId) })
@@ -76,6 +79,6 @@ export function ProviderModels({ provider }: { provider: ProviderDto }) {
     ]} actions={actions} renderCard={r => <ModelSummaryCard name={r.upstreamName} metadata={object(r.metadata)} control={enabled(r)} actions={actions(r)}>{priced(r) ? <Badge variant="secondary">{t("providers.models.priced")}</Badge> : null}</ModelSummaryCard>} /><Pagination page={visiblePage} pageSize={pageSize} total={list.data?.total ?? 0} onPage={setPage} onPageSize={setPageSize} /></QueryState>
     {editing ? <QueryState isPending={behavior.isPending} error={behavior.error}>{behavior.data ? <ProviderModelDialog key={editing.id} model={editing.row} channel={provider.channel} variants={readVariants(object(editing.row?.metadata), behavior.data)} onClose={() => setEditing(null)} onSave={value => save.mutate(value)} pending={save.isPending} error={save.error} /> : null}</QueryState> : null}
     {importing ? <ModelImportDialog mode={importing} providerId={provider.id} onClose={() => setImporting(null)} onSaved={refresh} /> : null}
-    {pricing ? <ModelPricingDialog providerId={provider.id} model={pricing.upstreamName} onClose={() => setPricing(null)} /> : null}
+    {pricing ? <ModelPricingDialog providerId={provider.id} model={pricing.upstreamName} matchingRules={(list.data?.items.find(row => row.id === pricing.id) ?? pricing).priceRules ?? []} onClose={() => setPricing(null)} /> : null}
   </div>
 }

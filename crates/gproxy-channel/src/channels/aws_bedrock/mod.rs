@@ -25,7 +25,7 @@
 //!   inference profiles over them, and ARNs naming either) take Claude
 //!   Messages on `InvokeModel` inside a Bedrock envelope: `model` and
 //!   `stream` move out of the body into the URL and `anthropic_version`
-//!   names Bedrock's own version, `bedrock-2023-05-31`. They do not take
+//!   defaults to `2026-10-21` (supported by Claude 4.7 and later). They do not take
 //!   Chat Completions on Bedrock, so an OpenAI client's request to one is
 //!   converted to Messages first.
 //! - **Everything else** is sent to Bedrock's OpenAI-compatible Chat
@@ -89,14 +89,12 @@ use http::{HeaderMap, HeaderValue, StatusCode, header};
 use crate::channel::{
     BaseChannel, ChannelCapabilities, ChannelDescriptor, ChannelError, ConfigKey, ConfigKeyKind,
     CredentialView, HOST_CONFIG_KEYS, LoginMode, OperationContext, OperationFuture, PrepareContext,
-    ProviderView, };
+    ProviderView,
+};
 use crate::channels::shared::cache;
 use endpoint::Plane;
 
 pub const ID: &str = "aws_bedrock";
-
-/// A foundation-model directory page is a few hundred kilobytes at most.
-const MAX_MODEL_BODY: usize = 8 * 1024 * 1024;
 
 const STREAMED_BODY: &str =
     "AWS SigV4 signs the payload hash, so a streamed request body cannot be sent to Bedrock";
@@ -252,12 +250,19 @@ impl BaseChannel for AwsBedrock {
         ID
     }
 
+    fn validate_credential_secret(&self, secret: &serde_json::Value) -> Result<(), ChannelError> {
+        request::Auth::from_secret(secret).map(|_| ()).map_err(|_| {
+            ChannelError::InvalidConfig("AWS credentials require `api_key` or both `access_key_id` and `secret_access_key` (optional `session_token`)".into())
+        })
+    }
+
     fn descriptor(&self) -> ChannelDescriptor {
         ChannelDescriptor {
             id: ID,
             display_name: "AWS Bedrock",
             // An access key pair or a Bedrock API key is pasted; AWS grants
             // neither through an OAuth flow this channel could drive.
+            credential_kinds: vec!["api_key", "aws_access_key"],
             login_modes: vec![LoginMode::ApiKey],
             capabilities: ChannelCapabilities::default(),
             config_keys: [
@@ -279,7 +284,7 @@ impl BaseChannel for AwsBedrock {
                 ConfigKey::optional(
                     "anthropic_version",
                     ConfigKeyKind::String,
-                    "The anthropic_version written into every Anthropic request body; defaults to bedrock-2023-05-31.",
+                    "The anthropic_version written into every Anthropic request body; defaults to 2026-10-21.",
                 ),
                 ConfigKey::optional(
                     "enable_claude_magic_cache",
@@ -427,7 +432,7 @@ async fn directory(
     if !response.status.is_success() {
         return Ok(response);
     }
-    let body = read_body(response.body, MAX_MODEL_BODY).await?;
+    let body = crate::channel::read_body(response.body).await?;
     let rewritten = models::rewrite(&body, operation == Operation::GetModel)?;
     let mut headers = response.headers;
     headers.insert(
@@ -495,25 +500,6 @@ fn translate(body: HttpBody) -> ByteStream {
     ))
 }
 
-async fn read_body(body: HttpBody, limit: usize) -> Result<Bytes, ChannelError> {
-    match body {
-        HttpBody::Bytes(bytes) => Ok(bytes),
-        HttpBody::Stream(mut stream) => {
-            let mut out = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk =
-                    chunk.map_err(|error| ChannelError::InvalidResponse(error.to_string()))?;
-                out.extend_from_slice(&chunk);
-                if out.len() > limit {
-                    return Err(ChannelError::InvalidResponse(
-                        "the AWS model directory exceeds the read limit".into(),
-                    ));
-                }
-            }
-            Ok(Bytes::from(out))
-        }
-    }
-}
 
 /// Unix seconds. `web-time` keeps this working on wasm, where
 /// `std::time::SystemTime::now` is unavailable.

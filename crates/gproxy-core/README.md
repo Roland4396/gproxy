@@ -52,7 +52,7 @@ with their original target and restricted credentials.
 
 `CredentialData` carries the resolved HTTP client, the same profile forced to
 HTTP/1.1 for WebSocket upgrades, the `QuotaDimension`s the channel declared for
-this credential, and a shared `CredentialState`: secret, expiry, lifecycle status
+this credential, and a shared `CredentialState`: secret, metadata, expiry, lifecycle status
 and Store version publish atomically as one `CredentialVersion`, each attempt
 pins one, and only a newer version replaces it. `Dead` credentials are never
 selected or refreshed; `status_reason` says why, and `CoreError::CredentialDead`
@@ -66,7 +66,7 @@ provider's → the Setting's default profile → the channel's
 fails the whole assembly.
 
 Codex defaults to reqwest; Claude Code API calls use wreq without emulation.
-Claude Code cookie login (including cookie-based token recovery) and Claude Web
+Claude Code cookie initialization (including cookie-based token recovery) and Claude Web
 use browser-emulated wreq. Explicit credential/provider/global profiles still win.
 
 Availability is one `CredentialBlocks` cache payload per credential, rebuilt
@@ -77,13 +77,16 @@ rate limiting, or consecutive failures. Streaks are per scope and operation, so 
 broken model neither hides behind nor poisons a healthy one. See
 [credential availability](../../design/core-credential-availability.md).
 
-`CredentialStrategy` supports `round_robin` and `earliest_reset`. The latter
-prefers the earliest future reset among applicable observed quota windows;
-ties rotate and missing observations fall back to round-robin. Blocked credentials
-remain excluded. The independent provider config `session_affinity` reuses an
-eligible successful pin before applying the selection strategy. Legacy `sticky`
-and `round_robin_affinity` retain round-robin with affinity by default; an explicit
-`session_affinity` overrides that default. Pins are scoped by caller and provider.
+`CredentialStrategy` supports `round_robin`, `earliest_reset`, `sticky`, and
+`round_robin_affinity`. `round_robin` rotates per request; `earliest_reset`
+prefers the earliest future reset among applicable observed quota windows,
+rotating ties and falling back to round-robin when observations are missing.
+`sticky` deterministically hashes the session and provider onto the sorted eligible
+credential set, independent of request order or cached pins. `round_robin_affinity`
+rotates for unbound sessions, then reuses a successful eligible pin scoped by caller
+and provider (24-hour idle TTL). Both affinity strategies use ordinary round-robin
+without a stable session. Blocked and disallowed credentials remain excluded.
+There is no separate provider `session_affinity` switch.
 See [session identity and selection](../../design/session-identity.md).
 
 Provider config `model_credentials` optionally maps exact upstream model IDs
@@ -142,6 +145,16 @@ is recorded before anything else can settle. `Execution` can only be built with
 the funnel's `Settled` proof. WebSocket operations run the same loop for the
 handshake; an established socket is captured, metered and rewritten in both
 directions and settles when it ends or is dropped.
+
+New Realtime sessions require a resolved model: OpenAI uses the handshake query;
+Gemini Live receives its selector through the host's first-frame setup path.
+The mapped target is bound into the query/setup and OpenAI response.create frames.
+OpenAI call continuations retain their existing scope/credential/model binding;
+Gemini connections do not interpret an OpenAI call_id as a continuation.
+
+Gemini Live usageMetadata is not yet normalized by the current protocol usage
+reader, which does not implement ConnectRealtime/Gemini. The socket path forwards
+those events unchanged; this implementation adds no substitute usage reading.
 
 ## Conversion
 
@@ -232,7 +245,10 @@ An exchange the upstream served without reported usage (or with missing token
 counts) is estimated locally when the Setting row enables usage: input tokens
 from the request's prompt text counted by the tokenizer for the upstream model
 (catalog vocabulary file, Setting default, or bundled encoders), output tokens as
-half the response bytes. The prompt text is read through the protocol wire
+half the generated Unicode characters, rounded up. Output counting reads text,
+reasoning and tool arguments through the existing stream framing or complete
+response, excluding SSE/JSON metadata, signatures, media and terminal snapshots
+that repeat streamed content. The prompt text is read through the protocol wire
 types of the exchange's native `(operation, dialect)` pair — system prompts,
 messages, tool calls and results, tool declarations — for Claude Messages,
 OpenAI Chat, OpenAI Responses (HTTP and websocket envelope), OpenAI
@@ -240,7 +256,8 @@ count-tokens, guardian, compaction, memory and embeddings, and Gemini
 generate, count-tokens and embeddings. Base64 media, file ids, URLs and
 encrypted blobs are never counted. There is no key-name fallback: a pair
 without an extractor, or a body the wire types reject, gets no input estimate
-at all (the output estimate still applies). Estimates are `Partial` and carry
+at all (output is estimated only when generated content was recognized).
+Estimates are `Partial` and carry
 `dimensions["estimated"] = "true"`; reported values are never overwritten and
 rejected answers are not estimated. `UsageState::Skipped` means the request's
 policy disabled usage, distinct from an upstream that reported nothing.

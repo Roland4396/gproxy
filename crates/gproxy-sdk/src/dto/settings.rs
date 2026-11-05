@@ -11,6 +11,7 @@ use gproxy_store::entity::config::setting;
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SettingsDto {
     pub instance: InstanceSettingsDto,
     pub logging: LoggingSettingsDto,
@@ -60,6 +61,7 @@ impl From<setting::Model> for SettingsDto {
                     .tokenizer_auth_token
                     .is_some_and(|token| !token.is_empty()),
                 retention_days: row.retention_days,
+                usage_retention_days: row.usage_retention_days,
                 capture_payload_retention_days: row.capture_payload_retention_days,
                 capture_payload_max_mb: row.capture_payload_max_mb,
                 quota_observation_retention_days: row.quota_observation_retention_days,
@@ -80,6 +82,7 @@ impl From<setting::Model> for SettingsDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InstanceSettingsDto {
     pub instance_name: String,
     #[serde(default = "empty_header_list")]
@@ -131,7 +134,13 @@ pub struct InstanceSettingsDto {
     /// The vocabulary source token is sealed like a credential secret; only
     /// its presence is reported.
     pub has_tokenizer_auth_token: bool,
+    /// Days of completed request captures to keep; None keeps them all.
     pub retention_days: Option<u32>,
+    /// Days of usage records to keep; None keeps them all. Usage statistics
+    /// and totals are computed from these. Absent in an older export, which
+    /// reads as keeping everything.
+    #[serde(default)]
+    pub usage_retention_days: Option<u32>,
     #[serde(default = "default_capture_retention")]
     pub capture_payload_retention_days: Option<u32>,
     #[serde(default = "default_capture_max_mb")]
@@ -153,6 +162,7 @@ pub struct InstanceSettingsDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LoggingSettingsDto {
     pub enable_downstream_log: bool,
     pub enable_downstream_log_body: bool,
@@ -176,6 +186,7 @@ pub struct LoggingSettingsDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SettingsPatch {
     #[serde(default)]
     pub instance: Option<InstanceSettingsPatch>,
@@ -187,6 +198,7 @@ pub struct SettingsPatch {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InstanceSettingsPatch {
     #[serde(default)]
     pub instance_name: Option<String>,
@@ -248,6 +260,9 @@ pub struct InstanceSettingsPatch {
     pub tokenizer_auth_token: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
     pub retention_days: Option<Option<u32>>,
+    /// `null` keeps every usage record.
+    #[serde(default, deserialize_with = "double_option")]
+    pub usage_retention_days: Option<Option<u32>>,
     #[serde(default, deserialize_with = "double_option")]
     pub capture_payload_retention_days: Option<Option<u32>>,
     #[serde(default, deserialize_with = "double_option")]
@@ -273,6 +288,7 @@ pub struct InstanceSettingsPatch {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LoggingSettingsPatch {
     #[serde(default)]
     pub enable_downstream_log: Option<bool>,

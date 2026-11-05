@@ -235,8 +235,12 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> CallBuilder<'_, C> {
             .for_operation(operation.operation)
             .max_request_body_bytes;
         let mut payload = Payload::buffer(body, cap).await;
-        if operation.operation == gproxy_protocol::Operation::CreateRealtimeCall
-            && options.model.is_none()
+        if matches!(
+            operation.operation,
+            gproxy_protocol::Operation::CreateRealtimeCall
+                | gproxy_protocol::Operation::CreateLiveSession
+                | gproxy_protocol::Operation::CreateRealtimeClientSecret
+        ) && options.model.is_none()
             && let Payload::Bytes(bytes) = &payload
         {
             let mut limits = snapshot.limits.codec();
@@ -283,6 +287,7 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> CallBuilder<'_, C> {
                 gproxy_protocol::Dialect::OpenAi
                     | gproxy_protocol::Dialect::OpenAiChat
                     | gproxy_protocol::Dialect::Claude
+                    | gproxy_protocol::Dialect::GeminiInteractions
             ) || (operation.dialect == gproxy_protocol::Dialect::Gemini
                 && query
                     .as_deref()
@@ -290,7 +295,9 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> CallBuilder<'_, C> {
             && prepared.plan.targets.iter().any(|target| {
                 matches!(gproxy_core::convert::route_for_model(&target.provider, operation, target.upstream_model.as_deref()),
                     Ok(gproxy_core::convert::Route::TransformTo { target })
-                        if target.operation == gproxy_protocol::Operation::GenerateContent)
+                        if target.operation == gproxy_protocol::Operation::GenerateContent
+                            || target.dialect == gproxy_protocol::Dialect::GeminiInteractions
+                            || operation.dialect == gproxy_protocol::Dialect::GeminiInteractions)
             });
         let gproxy = gproxy.clone();
         let pending = Box::pin(async move {
@@ -435,7 +442,7 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> ConnectBuilder<'_, C> {
             gproxy,
             operation,
             request,
-            options,
+            mut options,
         } = self;
         let WireRequest {
             method,
@@ -444,10 +451,37 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> ConnectBuilder<'_, C> {
             mut headers,
             body: (),
         } = request;
+        if operation.operation == gproxy_protocol::Operation::ConnectRealtime {
+            options.model = gproxy_core::realtime::connect::model(
+                operation,
+                &path,
+                query.as_deref(),
+                options.model.as_deref(),
+            )?;
+        }
         let snapshot = gproxy.core().snapshot();
-        let prepared = options
+        let mut prepared = options
             .prepare(gproxy, snapshot, operation, &headers, None)
             .await?;
+        if let Some(owned) = gproxy
+            .core()
+            .owned_resource_bindings(
+                &prepared.scope,
+                operation,
+                &path,
+                query.as_deref(),
+                &headers,
+                None,
+                prepared
+                    .plan
+                    .targets
+                    .iter()
+                    .map(|target| target.provider.entity.id.as_str()),
+            )
+            .await?
+        {
+            narrow_to_owned(&mut prepared.plan.targets, &owned);
+        }
         session::strip_gateway_header(&mut headers);
 
         let mut walk = Walk::new(prepared);
@@ -526,9 +560,17 @@ impl Options {
             SdkError::invalid("scope required: call scope() before send(), after admission")
         })?;
         let request_id = self.request_id.unwrap_or_else(random_id);
-        let model = self
-            .model
-            .or_else(|| body?.get("model")?.as_str().map(str::to_owned));
+        let model = self.model.or_else(|| {
+            if operation.operation == gproxy_protocol::Operation::CreateVoice {
+                return None;
+            }
+            if operation.dialect == gproxy_protocol::Dialect::GeminiInteractions {
+                return body
+                    .and_then(gproxy_protocol::gemini::interactions::request_target)
+                    .map(str::to_owned);
+            }
+            body?.get("model")?.as_str().map(str::to_owned)
+        });
 
         // The explicit identity first, then the request's own, then the
         // request id — which is honestly labelled as not being a session.
@@ -558,6 +600,7 @@ impl Options {
                     // pin a credential to it.
                     affinity_key: session.is_stable().then_some(session.id.as_str()),
                 },
+                headers,
             )
             .await?;
 
@@ -656,7 +699,9 @@ impl Walk {
     /// What the caller sees when no target answered.
     fn exhausted(self) -> SdkError {
         self.remembered
-            .unwrap_or(SdkError::Core(CoreError::NoUsableCredential))
+            .unwrap_or(SdkError::Core(CoreError::NoUsableCredential {
+                retry_after_ms: None,
+            }))
     }
 }
 
@@ -745,7 +790,9 @@ fn stops_the_call(error: &CoreError) -> bool {
     use CoreError as E;
     match error {
         // The provider had nothing to spend, or the material it had is gone.
-        E::NoUsableCredential | E::CredentialDead { .. } | E::RefreshContended { .. } => false,
+        E::NoUsableCredential { .. } | E::CredentialDead { .. } | E::RefreshContended { .. } => {
+            false
+        }
         // The continuation lives elsewhere; this provider is simply the wrong
         // address for it.
         E::ContinuationElsewhere { .. } => false,

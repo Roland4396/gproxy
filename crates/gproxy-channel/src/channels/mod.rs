@@ -50,6 +50,7 @@ channels! {
     "cline" => cline, cline::Cline;
     "cloudflare_ai_gateway" => cloudflare_ai_gateway, cloudflare_ai_gateway::CloudflareAiGateway;
     "codex" => codex, codex::Codex;
+    "commandcode" => commandcode, commandcode::CommandCode;
     "copilotcli" => copilotcli, copilotcli::CopilotCli;
     "custom" => custom, custom::Custom;
     "dashscope" => dashscope, dashscope::DashScope;
@@ -64,10 +65,13 @@ channels! {
     "nvidia" => nvidia, nvidia::Nvidia;
     "openai" => openai, openai::OpenAi;
     "opencode" => opencode, opencode::OpenCode::ZEN, opencode::OpenCode::GO;
+    "orcaterm" => orcaterm, orcaterm::OrcaTerm;
     "openrouter" => openrouter, openrouter::OpenRouter;
     "vercel" => vercel, vercel::Vercel;
+    "volcengine" => volcengine, volcengine::Volcengine::AGENT, volcengine::Volcengine::CODING;
     "vertex" => vertex, vertex::Vertex;
     "vertexexpress" => vertexexpress, vertexexpress::VertexExpress;
+    "trae" => trae, trae::Trae;
     "workbuddy" => workbuddy, workbuddy::WorkBuddy;
     "xai" => xai, xai::Xai;
 }
@@ -82,6 +86,7 @@ channels! {
     feature = "azure",
     feature = "claudeapi",
     feature = "codex",
+    feature = "commandcode",
     feature = "claudecode",
     feature = "claudeweb",
     feature = "cline",
@@ -99,10 +104,13 @@ channels! {
     feature = "nvidia",
     feature = "openai",
     feature = "opencode",
+    feature = "orcaterm",
     feature = "openrouter",
     feature = "vercel",
+    feature = "volcengine",
     feature = "vertex",
     feature = "vertexexpress",
+    feature = "trae",
     feature = "workbuddy",
     feature = "xai"
 ))]

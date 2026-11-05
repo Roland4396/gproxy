@@ -24,6 +24,7 @@ use crate::channel::{
     HOST_CONFIG_KEYS, HeaderAllowlist, LoginMode, PrepareContext, ProviderView,
     QuotaModel, QuotaQuery, forwardable,
 };
+use crate::channels::shared::claude_images;
 use crate::channels::shared::compatible::http::{insert_configured, strip_query_auth};
 use gproxy_protocol::{Dialect, HttpBody, Operation, OperationKey};
 use http::{HeaderName, HeaderValue, header};
@@ -98,6 +99,7 @@ impl BaseChannel for CloudflareAiGateway {
         ChannelDescriptor {
             id: ID,
             display_name: "Cloudflare AI Gateway",
+            credential_kinds: vec!["api_key"],
             login_modes: vec![LoginMode::ApiKey],
             capabilities: ChannelCapabilities {
                 quota_query: true,
@@ -205,8 +207,21 @@ impl BaseChannel for CloudflareAiGateway {
         if let Some(target) = builder.headers_mut() {
             *target = headers;
         }
+        let body = match ctx.request.body {
+            // The gateway may route to Bedrock or Vertex, where documents count too.
+            HttpBody::Bytes(bytes)
+                if ctx.operation.dialect == Dialect::Claude
+                    && matches!(
+                        ctx.operation.operation,
+                        Operation::GenerateContent | Operation::StreamGenerateContent
+                    ) =>
+            {
+                HttpBody::Bytes(claude_images::fit_bytes(bytes, true))
+            }
+            body => body,
+        };
         builder
-            .body(ctx.request.body)
+            .body(body)
             .map_err(|error| ChannelError::InvalidConfig(error.to_string()))
     }
 

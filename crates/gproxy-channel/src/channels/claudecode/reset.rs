@@ -1,5 +1,8 @@
-//! Claude Code 2.1.280 reset eligibility and explicit redemption.
+//! Claude Code 2.1.311 reset eligibility and explicit redemption.
 //! These GETs deliberately do not run as part of the plain usage query.
+//! Sources under samples/claude-code-2.1.311/readable/: chunk-fe3j6xq2.js
+//! (grant schema, redemption) and chunk-mjxed380.js (grant kinds, offers,
+//! unavailable reasons, weekly reset).
 
 use super::{
     Claudecode, account, base_url, fact, header_value, invalid_response, send, unix_now_ms,
@@ -34,7 +37,7 @@ async fn call(
     );
     headers.insert(
         header::USER_AGENT,
-        HeaderValue::from_static(super::CLI_USER_AGENT),
+        HeaderValue::from_static(super::ClientIdentity::of(context.provider).user_agent(None)),
     );
     headers.insert(
         "anthropic-beta",
@@ -83,8 +86,9 @@ struct Grants {
     #[serde(default)]
     at_limit: bool,
     #[serde(default)]
+    exhausted: Vec<String>,
+    #[serde(default)]
     grants: Vec<Grant>,
-    next_grant_id: Option<String>,
     cooldown_until: Option<String>,
 }
 
@@ -93,7 +97,6 @@ struct Grant {
     id: String,
     label: Option<String>,
     resets_left: u64,
-    starts_at: Option<String>,
     ends_at: Option<String>,
     #[serde(default)]
     clears: Vec<String>,
@@ -105,9 +108,89 @@ struct Grant {
     usable_now: bool,
     #[serde(default = "requires_limit")]
     use_requires_limit: bool,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    gives_back_weekly: bool,
+    unavailable_reason: Option<String>,
 }
 fn requires_limit() -> bool {
     true
+}
+
+/// Server `unavailable_reason` values the CLI accepts; others fall back to
+/// its own derivation.
+const UNAVAILABLE_REASONS: &[&str] = &[
+    "cooldown",
+    "blocked_five_hour",
+    "blocked_seven_day",
+    "blocked_opus",
+    "blocked_sonnet",
+    "blocked_other",
+    "cannot_clear",
+    "needs_limit",
+    "unavailable",
+];
+
+impl Grant {
+    /// The reset kind the CLI groups grants by (`qe`): a Fable give-back,
+    /// the server's type, else what the grant clears.
+    fn kind(&self) -> &str {
+        if self.gives_back_weekly {
+            return "fable";
+        }
+        if let Some(kind) = self
+            .kind
+            .as_deref()
+            .filter(|v| matches!(*v, "session" | "weekly" | "full"))
+        {
+            return kind;
+        }
+        let session = self.clears.iter().any(|v| v == "five_hour");
+        let other = self.clears.iter().any(|v| v != "five_hour");
+        match (session, other) {
+            (true, false) => "session",
+            (false, true) => "weekly",
+            _ => "full",
+        }
+    }
+
+    /// Why a grant the server marks unusable cannot be used now (`tr`).
+    fn unavailable_reason(&self, status: &Grants) -> String {
+        if let Some(reason) = self
+            .unavailable_reason
+            .as_deref()
+            .filter(|v| UNAVAILABLE_REASONS.contains(v))
+        {
+            return reason.into();
+        }
+        if status.cooldown_until.is_some() {
+            return "cooldown".into();
+        }
+        for limit in &self.blocking {
+            match limit.as_str() {
+                "five_hour" => return "blocked_five_hour".into(),
+                "seven_day" => return "blocked_seven_day".into(),
+                "seven_day_opus" => return "blocked_opus".into(),
+                "seven_day_sonnet" => return "blocked_sonnet".into(),
+                _ => {}
+            }
+        }
+        if !self.blocking.is_empty() {
+            return "blocked_other".into();
+        }
+        let refills = |limit: &String| {
+            self.clears.contains(limit) || (limit == "seven_day" && self.gives_back_weekly)
+        };
+        if status.at_limit && !status.exhausted.iter().any(refills) {
+            return "cannot_clear".into();
+        }
+        if self.use_requires_limit {
+            "needs_limit".into()
+        } else {
+            "unavailable".into()
+        }
+    }
 }
 
 fn unavailable(program: &str, reason: &str) -> QuotaResetOption {
@@ -166,12 +249,14 @@ fn grant_options(value: Option<&Value>, now: i64) -> Result<Vec<QuotaResetOption
         option.available_count = status.eligible.then_some(0);
         return Ok(vec![option]);
     }
-    Ok(status
+    // The server's `usable_now` decides; the CLI offers the first usable,
+    // unexpired grant of each kind and no longer waits for `next_grant_id`.
+    let mut offered = Vec::new();
+    let options = status
         .grants
-        .into_iter()
+        .iter()
         .map(|grant| {
             let expires_at_ms = instant(grant.ends_at.as_deref());
-            let next_available_at_ms = instant(status.cooldown_until.as_deref());
             let reason = if !status.eligible {
                 Some(
                     status
@@ -179,40 +264,34 @@ fn grant_options(value: Option<&Value>, now: i64) -> Result<Vec<QuotaResetOption
                         .clone()
                         .unwrap_or_else(|| "ineligible".into()),
                 )
-            } else if grant.resets_left == 0 {
-                Some("no_grant".into())
             } else if grant.paused {
                 Some("paused".into())
+            } else if grant.resets_left == 0 && !grant.usable_now {
+                Some("no_grant".into())
+            } else if !grant.usable_now {
+                Some(grant.unavailable_reason(&status))
             } else if expires_at_ms.is_some_and(|end| end <= now) {
                 Some("expired".into())
-            } else if instant(grant.starts_at.as_deref()).is_some_and(|start| start > now) {
-                Some("not_started".into())
-            } else if next_available_at_ms.is_some_and(|end| end > now) {
-                Some("cooldown".into())
-            } else if status.next_grant_id.as_deref() != Some(grant.id.as_str()) {
+            } else if offered.contains(&grant.kind()) {
                 Some("not_next_grant".into())
-            } else if !grant.blocking.is_empty() {
-                Some("uncovered_limit".into())
-            } else if grant.use_requires_limit && !status.at_limit {
-                Some("not_limited".into())
-            } else if !grant.usable_now {
-                Some("unavailable".into())
             } else {
+                offered.push(grant.kind());
                 None
             };
             QuotaResetOption {
                 program: "cedar_ember".into(),
-                grant_id: Some(grant.id),
-                label: grant.label,
+                grant_id: Some(grant.id.clone()),
+                label: grant.label.clone(),
                 available_count: Some(grant.resets_left),
                 expires_at_ms,
-                next_available_at_ms,
+                next_available_at_ms: instant(status.cooldown_until.as_deref()),
                 usable: reason.is_none(),
                 ineligible_reason: reason,
-                clears: grant.clears,
+                clears: grant.clears.clone(),
             }
         })
-        .collect())
+        .collect();
+    Ok(options)
 }
 
 impl QuotaReset for Claudecode {
@@ -260,9 +339,28 @@ impl QuotaReset for Claudecode {
             if !matches!(program, "juniper_tide" | "cedar_ember") {
                 return Err(ChannelError::InvalidConfig("unknown reset program".into()));
             }
-            // Revalidate exactly what the user confirmed, never switch grants.
-            let status = self.credits(context).await?;
-            let choice = status.options.iter().find(|option| {
+            // Revalidate only the selected program. An unrelated offer's
+            // rate limit or malformed response must not block this redemption.
+            let options = if program == "juniper_tide" {
+                let status = call(
+                    context,
+                    Method::GET,
+                    "/api/oauth/usage?at_wall=1&skip_spend=1",
+                    None,
+                )
+                .await?;
+                vec![weekly_option(status.get("juniper_tide"))?]
+            } else {
+                let status = call(
+                    context,
+                    Method::GET,
+                    "/api/oauth/usage?cedar_ember=1&skip_spend=1",
+                    None,
+                )
+                .await?;
+                grant_options(status.get("cedar_ember"), unix_now_ms())?
+            };
+            let choice = options.iter().find(|option| {
                 option.program == program && option.grant_id.as_deref() == request.grant_id
             });
             let Some(choice) = choice.filter(|option| option.usable) else {

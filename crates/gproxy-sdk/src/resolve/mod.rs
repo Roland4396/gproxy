@@ -2,8 +2,7 @@
 //!
 //! Core does not route: it executes against a provider and a credential set a
 //! caller already named. This module owns the other half — exposed model
-//! names, the routes they select, the `channel/model` and `provider/model`
-//! prefixes, the narrowing an application layer applies, and the order the
+//! names, the routes they select, the `provider/model` prefix, the narrowing an application layer applies, and the order the
 //! resulting targets are tried in. The rows live here rather than in
 //! `CoreData` because nothing in the engine reads them.
 //!
@@ -15,16 +14,13 @@
 //! |---|---|
 //! | absent | every enabled provider, with no upstream model |
 //! | an exposed model name | that route's enabled members |
-//! | `channel/model` | the providers of that channel, preferring the ones whose catalog lists `model` |
 //! | `provider/model` | that one provider |
 //! | anything else | [`SdkError::UnknownModel`] |
 //!
-//! Exact exposed names are matched before the prefix forms, so an operator can
-//! expose the literal name `openai/gpt-5` and have it mean their route. Within
-//! the prefix forms **a channel id wins over a provider of the same name**: a
-//! channel id is a fixed part of this build and cannot be renamed out of the
-//! way, while a provider can always be renamed, so the collision is resolved
-//! in favour of the name the operator cannot change.
+//! Exact exposed names are matched before the prefix form, so an operator can
+//! expose the literal name `openai/gpt-5` and have it mean their route. The
+//! prefix is always a provider name, never a channel id: a provider named
+//! `openai` on the `codex` channel is reached as `openai/…`.
 
 mod balance;
 mod table;
@@ -36,7 +32,8 @@ use std::{
 };
 
 use gproxy_core::{
-    CoreData, CredentialBlocks, CredentialData, CredentialStatus, ProviderData, keys,
+    CoreData, CredentialBlocks, CredentialData, CredentialStatus, CredentialStrategy, ProviderData,
+    keys,
 };
 use gproxy_protocol::OperationKey;
 use gproxy_store::entity::routing::route::RouteStrategy;
@@ -64,9 +61,8 @@ pub struct ResolveRequest<'a> {
     pub allowed_credentials: Option<&'a BTreeSet<String>>,
     /// Restrict to one channel id, as an ingress mount does.
     pub channel: Option<&'a str>,
-    /// A stable session key. When the provider pins credentials to sessions,
-    /// its credentials are ordered by a stable hash of this key, so the same
-    /// session keeps offering core the same first choice.
+    /// A stable session key. Sticky providers order credentials by its hash,
+    /// using the same mapping as Core. Round-robin affinity is assigned by Core.
     pub affinity_key: Option<&'a str>,
 }
 
@@ -92,7 +88,7 @@ impl<'a> ResolveRequest<'a> {
 #[derive(Debug)]
 pub struct Plan {
     /// What the name resolved to: the route name, the part
-    /// after the prefix for `channel/model` and `provider/model`, `None` when
+    /// after the prefix for `provider/model`, `None` when
     /// no model was named. It is not a per-target upstream model — a route's
     /// members may each name their own.
     pub resolved_model: Option<String>,
@@ -179,7 +175,8 @@ impl<C> Gproxy<C> {
     pub async fn resolve(&self, request: ResolveRequest<'_>) -> SdkResult<Plan> {
         let snapshot = self.0.core.snapshot();
         let routing = self.0.routing.load_full();
-        self.resolve_with(&snapshot, &routing, request).await
+        self.resolve_with(&snapshot, &routing, request, &http::HeaderMap::new())
+            .await
     }
 
     pub(crate) async fn resolve_with(
@@ -187,6 +184,7 @@ impl<C> Gproxy<C> {
         snapshot: &CoreData,
         routing: &RoutingTable,
         request: ResolveRequest<'_>,
+        headers: &http::HeaderMap,
     ) -> SdkResult<Plan> {
         let matched = self.match_name(snapshot, routing, request.model)?;
         let named = matched.candidates.len();
@@ -214,7 +212,7 @@ impl<C> Gproxy<C> {
                 continue;
             }
             let Some((credentials, health)) = self
-                .usable_credentials(snapshot, &candidate, &request, now)
+                .usable_credentials(snapshot, &candidate, &request, headers, now)
                 .await
             else {
                 continue;
@@ -322,54 +320,6 @@ impl<C> Gproxy<C> {
             .filter(|(head, tail)| !head.is_empty() && !tail.is_empty())
             .ok_or_else(|| SdkError::UnknownModel(model.to_owned()))?;
 
-        // A channel id before a provider name: channel ids are fixed by this
-        // build and an operator cannot rename one out of the way.
-        if self.0.core.channels().get(head).is_some() {
-            let of_channel: Vec<&Arc<ProviderData>> = snapshot
-                .providers
-                .values()
-                .filter(|provider| provider.entity.channel == head)
-                .collect();
-            // Prefer the providers that say they serve this model. When none
-            // of them has a catalog entry for it, the catalog is simply not
-            // maintained and every provider of the channel is a candidate.
-            let listed: Vec<&Arc<ProviderData>> = of_channel
-                .iter()
-                .copied()
-                .filter(|provider| {
-                    provider.models.iter().any(|model| {
-                        model.enabled
-                            && (model.upstream_name == tail
-                                || model.variant_names().contains(&tail))
-                    })
-                })
-                .collect();
-            let chosen = if listed.is_empty() {
-                of_channel
-            } else {
-                listed
-            };
-            let mut candidates: Vec<Candidate> = chosen
-                .into_iter()
-                .map(|provider| Candidate {
-                    provider: provider.clone(),
-                    upstream_model: Some(tail.to_owned()),
-                    tier: 0,
-                    weight: 100,
-                    member_id: None,
-                })
-                .collect();
-            candidates.sort_by(|a, b| a.provider.entity.id.cmp(&b.provider.entity.id));
-            return Ok(Matched {
-                candidates,
-                strategy: RouteStrategy::RoundRobin,
-                balance_key: format!("@channel:{head}"),
-                session_affinity: false,
-                max_attempts: routing.default_max_attempts,
-                resolved_model: Some(tail.to_owned()),
-            });
-        }
-
         let provider = snapshot
             .providers
             .values()
@@ -406,6 +356,7 @@ impl<C> Gproxy<C> {
         snapshot: &CoreData,
         candidate: &Candidate,
         request: &ResolveRequest<'_>,
+        headers: &http::HeaderMap,
         now_ms: i64,
     ) -> Option<(Vec<Arc<CredentialData>>, u8)> {
         if matches!(
@@ -462,7 +413,13 @@ impl<C> Gproxy<C> {
             .into_iter()
             .zip(blocks)
             .map(|(credential, mut blocks)| {
-                blocks.retain_enforced(&candidate.provider, &credential, model);
+                blocks.retain_for_request(
+                    &candidate.provider,
+                    &credential,
+                    model,
+                    request.operation,
+                    headers,
+                );
                 (credential, blocks)
             })
             .partition(|(_, blocks)| blocks.blocked_by(model, operation, now_ms).is_some());
@@ -520,11 +477,9 @@ impl<C> Gproxy<C> {
         }
     }
 
-    /// Offer a session-pinned provider its credentials in an order that
-    /// depends only on the session and the provider, so every instance
-    /// proposes the same first choice. Core still owns the actual pin — it
-    /// reads the durable affinity from the cache and only falls back to the
-    /// order it was handed.
+    /// Offer sticky credentials in the same deterministic order used by Core.
+    /// Core rechecks eligibility before choosing; round-robin affinity is
+    /// assigned and cached there, without session-hash ordering here.
     fn apply_affinity(
         &self,
         candidate: &Candidate,
@@ -532,13 +487,13 @@ impl<C> Gproxy<C> {
         credentials: &mut [Arc<CredentialData>],
     ) {
         let Some(key) = affinity_key else { return };
-        if !candidate.provider.session_affinity {
+        if candidate.provider.credential_strategy != CredentialStrategy::Sticky {
             return;
         }
         if credentials.len() < 2 {
             return;
         }
-        let slot = balance::stable_slot(key, &candidate.provider.entity.id);
+        let slot = gproxy_core::sticky_slot(key, &candidate.provider.entity.id);
         let offset = usize::try_from(slot % credentials.len() as u64).unwrap_or(0);
         credentials.rotate_left(offset);
     }

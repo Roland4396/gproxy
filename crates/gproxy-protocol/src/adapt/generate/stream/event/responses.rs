@@ -34,7 +34,9 @@ impl NativeEvent for s::StreamEvent {
     }
     fn event_name(&self) -> Option<&'static str> {
         Some(match self {
+            Self::Unknown => return None,
             Self::Keepalive => "keepalive",
+            Self::Metadata(_) => "response.metadata",
             Self::Created(_) => "response.created",
             Self::Queued(_) => "response.queued",
             Self::InProgress(_) => "response.in_progress",

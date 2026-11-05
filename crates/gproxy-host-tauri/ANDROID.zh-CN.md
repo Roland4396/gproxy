@@ -32,26 +32,18 @@
 
 ## Tauri 给了什么，以及它没给的三件事
 
-Tauri v2 支持 Android，脚手架、WebView、IPC 桥和打包都给了。但手机上一个网关
-真正需要的三种行为，它一个都没给。这三件事在 v3 手写的 Java 里全都有，这里是
-**移植**，不是重新发明。
+Tauri v2 提供脚手架、WebView、IPC 桥和打包。网关在手机上还需要下面三样，由
+`gen/android/` 里的 Kotlin 实现：
 
-| | v3，Java | v4，`gen/android/` 里的 Kotlin |
-|---|---|---|
-| 前台服务 | `scripts/android/GproxyService.java.in` | `GproxyService.kt` |
-| 开机接收器 | `scripts/android/GproxyBootReceiver.java.in` | `GproxyBootReceiver.kt` |
-| 应用内更新 | `GproxyUpdateActivity.java.in`、`GproxyUpdateProvider.java.in` | `GproxyUpdateActivity.kt`、`GproxyUpdateProvider.kt` |
+| 行为 | 实现 |
+|---|---|
+| 前台服务 | `GproxyService.kt` |
+| 开机接收器 | `GproxyBootReceiver.kt` |
+| 应用内更新 | `GproxyUpdateActivity.kt`、`GproxyUpdateProvider.kt` |
 
 ### 前台服务不再监管任何东西
 
-这是与 v3 唯一实质的差别，而它改变了其余一切的形状。
-
-v3 的服务把 `gproxy.bin` 从 APK 的 assets 里拷出来，设好 `LD_LIBRARY_PATH`，
-以**子进程**方式拉起，然后轮询 `http://127.0.0.1:8787/admin` 直到它应答，再把
-子进程的 stdout 抽进一个环形缓冲。App 和网关是两个进程，服务的职责是监管另一
-个。
-
-现在引擎被编进 `libgproxy_host_tauri.so`，数据面就在 App 自己的进程里监听。
+引擎被编进 `libgproxy_host_tauri.so`，数据面就在 App 自己的进程里监听。
 没有子进程要管，没有 asset 要解包，没有健康轮询要写，也不存在两个进程对「打开
 了哪个数据库」产生分歧的可能。服务只为一件事存在：**阻止 Android 杀掉引擎所在
 的这个进程**。前台没有任何东西的 App，在用户切走后几秒内就会被冻结、然后被
@@ -106,7 +98,7 @@ state 交给了 261 条命令；不存在一种诚实的「停止」能让这些
 ## 为什么网关是进程，而不是窗口
 
 这套安排之所以合法，依赖 Tauri 生成代码里的一个事实，所以这里带出处地写明：
-`gen/android/app/src/main/java/com/leenhawk/gproxy/app/generated/WryActivity.kt`
+`gen/android/app/src/main/java/com/leenhawk/gproxy/desktop/generated/WryActivity.kt`
 是从 **`ProcessLifecycleOwner`** 而不是 activity 里调用 `Rust.create()` 的——
 也就是真正运行 `gproxy_host_tauri::start` 的那一次调用：
 
@@ -196,7 +188,7 @@ pnpm exec tauri android build --apk --debug       # debug
 ## 把 APK 读回来（v4.0.0 历史构建）
 
 下面是标识更名前的真实输出，保留旧包名和 JNI 名称作为历史记录；当前构建使用
-`com.leenhawk.gproxy.app`。
+`com.leenhawk.gproxy.desktop`。
 
 对 release 构建跑 `aapt dump badging`，略去九十多行翻译过的
 `application-label-*`：
@@ -318,19 +310,12 @@ dev.gproxy.desktop.GproxyNative -> dev.gproxy.desktop.GproxyNative:
 意外的瓶颈是磁盘：这个引擎的 debug `.so` 约一个 GB，四个 ABI 足以撑爆一台小
 runner。
 
-## v3 的 APK 机器还在
+## Termux
 
-Android 相关的东西一样都没删。`scripts/android/`、
-`scripts/package-android-apk.sh` 以及两个 `*-linux-android` 发布目标作为参考保留。CLI 发布产物现为 ZIP 和 Termux DEB，不再构建旧 wrapper APK。
-它们是两回事：
+两个 `*-linux-android` 发布目标是 Android ABI 上的纯服务端二进制，在 Termux 的
+shell 里运行。它们与 App 无关，发布产物为 ZIP 和 Termux DEB。
 
-- 那些 **Java 模板**是这次移植的源材料，也是「某处当初这么做是不是另有原因」时
-  的参照；
-- **`*-linux-android` 目标**是给 Termux 的——在 Android ABI 上跑的纯服务端二进
-  制，从 shell 里启动——那是与「带窗口的 App」完全不同的另一个故事，不受这里任
-  何改动影响。
-
-当前图形版在安卓、鸿蒙和桌面平台统一使用 `com.leenhawk.gproxy.app`，
+当前图形版在安卓、鸿蒙和桌面平台统一使用 `com.leenhawk.gproxy.desktop`，
 命令行版 **GPROXY CLI** 已经存在，其对应的项目命名为 `com.leenhawk.gproxy.cli`。
 macOS CLI 新服务使用该标识，已有旧服务继续兼容。v3 旧封装包仍为
 `io.github.leenhawk.gproxy`，早期 v4 包使用 `dev.gproxy.desktop`。

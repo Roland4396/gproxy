@@ -12,8 +12,8 @@
 //! Both prompt totals include the cached read (`cached_tokens`) and, where a
 //! compatible vendor reports one, the cache write (`cache_write_tokens`).
 //! The normalized input is the ordinary input alone, so both come back out
-//! of it and ride in the fields that name them; a cache write has no TTL on
-//! this wire and is carried in the 30-minute bucket. Per-modality details
+//! of it and ride in the fields that name them. Responses reports write TTLs
+//! in `cache_write_tokens_details`; older replies retain an unknown TTL. Per-modality details
 //! (`audio_tokens`, `text_tokens`, `image_tokens`, and the cached
 //! `cached_tokens_details` breakdown) are recorded as metrics that are
 //! subsets of the totals, and the reading says so with the
@@ -65,7 +65,14 @@ pub(super) fn from_usage(usage: &Value) -> Option<NormalizedUsage> {
     let input = details(input_names);
     let output = details(output_names);
     let cached = count(input, "cached_tokens");
-    let cache_write = count(input, "cache_write_tokens");
+    let breakdown = input.get("cache_write_tokens_details").and_then(|details| {
+        Some((
+            count(details, "ttl_30m_tokens")?,
+            count(details, "ttl_12h_tokens")?,
+        ))
+    });
+    let cache_write = count(input, "cache_write_tokens")
+        .or_else(|| breakdown.map(|(short, long)| short.saturating_add(long)));
     let mut normalized = NormalizedUsage {
         completeness: UsageCompleteness::Complete,
         ..NormalizedUsage::default()
@@ -78,7 +85,18 @@ pub(super) fn from_usage(usage: &Value) -> Option<NormalizedUsage> {
     );
     normalized.tokens.output_tokens = Some(count(usage, completion).unwrap_or_default());
     normalized.tokens.cached_input_tokens = cached;
-    normalized.tokens.cache_creation_30m_tokens = cache_write;
+    if let Some((short, long)) = breakdown
+        && Some(short.saturating_add(long)) == cache_write
+    {
+        normalized
+            .tokens
+            .add_cache_creation(Some(short), Some(1800));
+        normalized
+            .tokens
+            .add_cache_creation(Some(long), Some(43200));
+    } else {
+        normalized.tokens.add_cache_creation(cache_write, None);
+    }
     normalized.tokens.reasoning_tokens = count(output, "reasoning_tokens");
     for modality in MODALITIES {
         let tokens = format!("{modality}_tokens");
@@ -112,6 +130,8 @@ pub(super) fn from_usage(usage: &Value) -> Option<NormalizedUsage> {
 struct Envelope {
     #[serde(default, deserialize_with = "common::string")]
     id: Option<String>,
+    #[serde(default, deserialize_with = "common::string")]
+    model: Option<String>,
     #[serde(default, deserialize_with = "common::object")]
     usage: Option<Value>,
     #[serde(default, deserialize_with = "common::any")]
@@ -122,6 +142,8 @@ struct Envelope {
 /// event-shaped body.
 #[derive(Deserialize)]
 struct Reply {
+    #[serde(default, deserialize_with = "common::string")]
+    model: Option<String>,
     #[serde(default, deserialize_with = "common::object")]
     usage: Option<Value>,
     #[serde(default, deserialize_with = "common::any")]
@@ -133,20 +155,29 @@ struct Reply {
 /// Usage from a buffered Chat Completions or Responses reply.
 pub(super) fn whole(body: &[u8]) -> Option<NormalizedUsage> {
     let reply: Reply = serde_json::from_slice(body).ok()?;
-    let (usage, tier) = match reply.usage {
-        Some(usage) => (
-            usage,
-            reply
-                .service_tier
-                .or_else(|| reply.response.and_then(|response| response.service_tier)),
-        ),
+    let (usage, tier, model) = match reply.usage {
+        Some(usage) => {
+            let (tier, model) = match reply.response {
+                Some(response) => (
+                    reply.service_tier.or(response.service_tier),
+                    reply.model.or(response.model),
+                ),
+                None => (reply.service_tier, reply.model),
+            };
+            (usage, tier, model)
+        }
         None => {
             let response = reply.response?;
-            (response.usage?, response.service_tier)
+            (
+                response.usage?,
+                response.service_tier,
+                response.model.or(reply.model),
+            )
         }
     };
     let mut normalized = from_usage(&usage)?;
     common::service_tier(&mut normalized, tier.as_ref().and_then(common::label));
+    common::response_model(&mut normalized, model);
     Some(normalized)
 }
 
@@ -178,6 +209,7 @@ impl ChatStream {
             &mut usage,
             reply.service_tier.as_ref().and_then(common::label),
         );
+        common::response_model(&mut usage, reply.model);
         self.usage = Some(usage);
         true
     }
@@ -291,13 +323,18 @@ impl ResponsesStream {
             return false;
         }
         let image = IMAGE_DONE.contains(&kind);
-        let (id, usage, tier) = if image {
-            (event.generation_id.clone(), event.usage.clone(), None)
+        let (id, usage, tier, model) = if image {
+            (event.generation_id.clone(), event.usage.clone(), None, None)
         } else {
             let Some(response) = event.response.take() else {
                 return false;
             };
-            (response.id, response.usage, response.service_tier)
+            (
+                response.id,
+                response.usage,
+                response.service_tier,
+                response.model,
+            )
         };
         let reading = usage.as_ref().and_then(|usage| {
             if self.mode == Mode::Image {
@@ -315,6 +352,7 @@ impl ResponsesStream {
             return false;
         };
         common::service_tier(&mut reading, tier.as_ref().and_then(common::label));
+        common::response_model(&mut reading, model);
         if image {
             common::metric(&mut reading, "image_outputs", 1);
             media::qualify(
@@ -377,6 +415,42 @@ mod tests {
     }
 
     #[test]
+    fn responses_cache_write_lifetimes_survive_buffered_and_streamed_metering() {
+        let response = json!({"id":"r", "usage":{
+            "input_tokens":12000,"output_tokens":1,
+            "input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000,
+                "cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}}
+        }});
+        let expected = buffered(Dialect::OpenAi, &response).unwrap();
+        assert_eq!(expected.tokens.input_tokens, Some(1000));
+        assert_eq!(expected.tokens.cached_input_tokens, Some(4000));
+        assert_eq!(expected.tokens.cache_creation_tokens(), 7000);
+        assert_eq!(
+            expected.tokens.cache_creation,
+            vec![
+                super::super::types::CacheCreation {
+                    tokens: 3000,
+                    ttl_seconds: Some(1800)
+                },
+                super::super::types::CacheCreation {
+                    tokens: 4000,
+                    ttl_seconds: Some(43200)
+                },
+            ]
+        );
+        let event = json!({"type":"response.completed", "response":response});
+        let wire = format!("data: {event}\n\n");
+        let streamed = feed_sse(
+            Operation::StreamGenerateContent,
+            Dialect::OpenAi,
+            &chunked(&wire, 7),
+            UsageStreamEnd::Complete,
+        )
+        .unwrap();
+        assert_eq!(streamed.tokens, expected.tokens);
+    }
+
+    #[test]
     fn chat_reads_cache_reads_writes_reasoning_and_modalities() {
         let usage = buffered(
             Dialect::OpenAiChat,
@@ -389,7 +463,15 @@ mod tests {
         assert_eq!(usage.tokens.input_tokens, Some(57));
         assert_eq!(usage.tokens.output_tokens, Some(20));
         assert_eq!(usage.tokens.cached_input_tokens, Some(40));
-        assert_eq!(usage.tokens.cache_creation_30m_tokens, Some(3));
+        assert_eq!(
+            usage
+                .tokens
+                .cache_creation
+                .iter()
+                .find(|entry| entry.ttl_seconds.is_none())
+                .map(|entry| entry.tokens),
+            Some(3)
+        );
         assert_eq!(usage.tokens.reasoning_tokens, Some(7));
         assert_eq!(usage.metrics["audio_input_tokens"], 5.into());
         assert!(!usage.metrics.contains_key("audio_output_tokens"), "zero");
@@ -409,7 +491,14 @@ mod tests {
             "total_tokens is optional"
         );
         assert!(bare.dimensions.is_empty());
-        assert_eq!(bare.tokens.cache_creation_30m_tokens, None);
+        assert_eq!(
+            bare.tokens
+                .cache_creation
+                .iter()
+                .find(|entry| entry.ttl_seconds.is_none())
+                .map(|entry| entry.tokens),
+            None
+        );
     }
 
     #[test]
@@ -425,7 +514,15 @@ mod tests {
             )
             .unwrap();
             assert_eq!(usage.tokens.input_tokens, Some(57));
-            assert_eq!(usage.tokens.cache_creation_30m_tokens, Some(3));
+            assert_eq!(
+                usage
+                    .tokens
+                    .cache_creation
+                    .iter()
+                    .find(|entry| entry.ttl_seconds.is_none())
+                    .map(|entry| entry.tokens),
+                Some(3)
+            );
             assert_eq!(usage.tokens.reasoning_tokens, Some(2));
             assert_eq!(usage.metrics["web_searches"], 3.into());
             assert_eq!(usage.actual_service_tier.as_deref(), Some("priority"));
@@ -437,7 +534,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            zero.tokens.cache_creation_30m_tokens,
+            zero.tokens
+                .cache_creation
+                .iter()
+                .find(|entry| entry.ttl_seconds.is_none())
+                .map(|entry| entry.tokens),
             Some(0),
             "an explicit zero stays one"
         );

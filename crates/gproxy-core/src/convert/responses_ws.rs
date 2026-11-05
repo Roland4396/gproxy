@@ -16,7 +16,7 @@ mod responses_http;
 
 use super::{
     Call, Converted,
-    generate::{OwnedState, decode, namespace, stream_headers, stream_settings, transport},
+    generate::{OwnedState, decode, namespace, stream_headers, stream_settings},
 };
 use crate::{
     Core, CoreError, CoreResult, ProtocolState, RequestContext, StateScope, UsageState,
@@ -85,6 +85,8 @@ pub(crate) async fn over_websocket<C: BatchConnectionTrait + Send + Sync + 'stat
     let limits = call.limits;
     // Identities and continuation state are Responses'; the socket is transport.
     let state = &call.generation_state_for(Dialect::OpenAi)?;
+    let (media, media_scope) = call.resources();
+    let resources = &call.generation_resources(&media, &media_scope);
     let endpoint = super::generate_endpoint(Dialect::OpenAi, &state.target.model, true)?;
     let identities = GenerationIdentity::new(namespace(), namespace(), client, Dialect::OpenAi)?;
     let stream_target = StreamTarget {
@@ -95,16 +97,20 @@ pub(crate) async fn over_websocket<C: BatchConnectionTrait + Send + Sync + 'stat
     macro_rules! run {
         ($pair:ty, $input:ty) => {{
             let input: $input = decode(body, limits)?;
-            run!(@drive <$pair>::prepare_stream(input, stream_target, settings, state))
+            run!(@drive <$pair>::prepare_stream_with_capabilities(
+                input, stream_target, settings, state, resources
+            ))
         }};
         ($pair:ty, $input:ty, $ctx:expr) => {{
             let input: $input = decode(body, limits)?;
             let context = $ctx;
-            run!(@drive <$pair>::prepare_stream(input, stream_target, context, settings, state))
+            run!(@drive <$pair>::prepare_stream_with_capabilities(
+                input, stream_target, context, settings, state, resources
+            ))
         }};
         (@drive $prepare:expr) => {{
             Box::pin(async move {
-                let invocation = $prepare.await?;
+                let invocation = Box::new(Box::pin($prepare).await?);
                 let session = match connect(
                     upstream,
                     &WS_KEY,
@@ -133,13 +139,15 @@ pub(crate) async fn over_websocket<C: BatchConnectionTrait + Send + Sync + 'stat
                     let mut turn = match invocation.start_websocket(&mut session, &access).await {
                         Ok(turn) => turn,
                         Err(error) => {
-                            let _ = tx.send(Err(transport(error))).await;
+                            let _ = tx.send(Err(super::stream_error::converted(error, client, client_framing, 0))).await;
                             return;
                         }
                     };
+                    let mut sequence = 0i64;
                     loop {
                         match turn.next(&access).await {
                             Ok(Some(chunk)) => {
+                                sequence += i64::from(chunk.event.is_some());
                                 if !chunk.bytes.is_empty()
                                     && tx.send(Ok(chunk.bytes)).await.is_err()
                                 {
@@ -148,7 +156,7 @@ pub(crate) async fn over_websocket<C: BatchConnectionTrait + Send + Sync + 'stat
                             }
                             Ok(None) => return,
                             Err(error) => {
-                                let _ = tx.send(Err(transport(error))).await;
+                                let _ = tx.send(Err(super::stream_error::converted(error, client, client_framing, sequence))).await;
                                 return;
                             }
                         }
@@ -191,7 +199,7 @@ pub(crate) async fn over_websocket<C: BatchConnectionTrait + Send + Sync + 'stat
 fn error_frame(status: u16, lane: Option<String>, message: String) -> WsFrame {
     let message = ErrorMessage {
         type_: ErrorMessageType::Error,
-        status,
+        status: Some(status),
         stream_id: lane,
         error: ErrorDetail {
             type_: Some("invalid_request_error".into()),
@@ -236,7 +244,10 @@ pub(crate) async fn serve<C: BatchConnectionTrait + Send + Sync + 'static>(
         )));
     }
     let now = now_ms();
-    let selection = match core.select_credential(&request, &HashSet::new(), now).await {
+    let selection = match core
+        .select_credential(&request, &wire.headers, &HashSet::new(), now)
+        .await
+    {
         Ok(selection) => selection,
         Err(error) => {
             funnel.finish(UsageState::Failed).await;

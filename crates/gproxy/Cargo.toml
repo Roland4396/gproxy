@@ -3,6 +3,7 @@ name = "gproxy"
 description = "The GPROXY v4 command line: configuration, schema, bootstrap, transfer and the native server"
 readme = "README.md"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -26,8 +27,8 @@ path = "src/bin/serverless.rs"
 required-features = ["postgres"]
 
 [features]
-# A single-node SQLite instance with every channel this repository implements.
-default = ["channels", "memory", "fs", "bundled-vocabulary", "embedded-console"]
+# Every channel and native SQL driver; SQLite remains the default store.
+default = ["channels", "memory", "fs", "bundled-vocabulary", "embedded-console", "postgres", "mysql"]
 
 # Omit for CI builds that do not carry the Web console.
 embedded-console = ["gproxy-host-axum/embedded-console"]
@@ -61,10 +62,13 @@ kiro = ["gproxy-sdk/kiro"]
 nvidia = ["gproxy-sdk/nvidia"]
 openai = ["gproxy-sdk/openai"]
 opencode = ["gproxy-sdk/opencode"]
+orcaterm = ["gproxy-sdk/orcaterm"]
 openrouter = ["gproxy-sdk/openrouter"]
 vercel = ["gproxy-sdk/vercel"]
+volcengine = ["gproxy-sdk/volcengine"]
 vertex = ["gproxy-sdk/vertex"]
 vertexexpress = ["gproxy-sdk/vertexexpress"]
+trae = ["gproxy-sdk/trae"]
 workbuddy = ["gproxy-sdk/workbuddy"]
 xai = ["gproxy-sdk/xai"]
 
@@ -90,6 +94,8 @@ axum = { workspace = true, features = ["form", "http1", "http2", "json", "matche
 # key given here in hex is re-encoded rather than handed over as typed.
 base64 = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
 # `.env`, loaded without overriding anything the real environment already set.
 dotenvy = { workspace = true }
 # Detached ed25519 verification of the signed update manifest. Verification
@@ -103,6 +109,8 @@ gproxy-host-axum = { workspace = true }
 gproxy-sdk = { workspace = true }
 gproxy-seaorm = { workspace = true, features = ["group-commit"] }
 gproxy-store = { workspace = true }
+# The first-run wizard's prompts, asked only when a person is at a terminal.
+inquire = { workspace = true }
 # The generated first-run password, and nothing else.
 getrandom = { workspace = true }
 # The two update downloads: a signed manifest and one release archive. It
@@ -139,6 +147,10 @@ zip = { workspace = true }
 # `rename(2)` and this is not compiled at all.
 [target.'cfg(not(unix))'.dependencies]
 self-replace = { workspace = true }
+
+# Package identity, so an MSIX install defaults its data directory per user.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
 
 [dev-dependencies]
 # `datetime!` literals in the announcement filter tests.

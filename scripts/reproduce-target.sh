@@ -46,10 +46,8 @@ if [ "$TARGET_OS" = windows ]; then
   export RUSTFLAGS='-C target-feature=+crt-static'
   if [ "$TARGET_TRIPLE" = aarch64-pc-windows-msvc ]; then
     export CMAKE_TOOLCHAIN_FILE_aarch64_pc_windows_msvc="$(cygpath -m "$PWD/scripts/cmake/windows-arm64.cmake")"
-    pwsh -NoProfile -File scripts/install-windows-arm64-upx.ps1
-  else
-    bash scripts/install-upx.sh
   fi
+  bash scripts/install-upx.sh
 elif [ "$UPX_ENABLED" = true ]; then
   bash scripts/install-upx.sh
 fi
@@ -60,9 +58,9 @@ case "$kind" in
   store-fdroid | store-google-play | store-appgallery)
     bash scripts/install-android-upx.sh
     release_tool_paths
-    bash scripts/mobile/build-android.sh "${kind#store-}" "${TARGET_TRIPLE%%-*}"
+    bash scripts/mobile/build-android.sh "${kind#store-}" universal
     mkdir -p dist/release
-    cp dist/mobile/"${kind#store-}"/"${TARGET_TRIPLE%%-*}"/* dist/release/
+    cp dist/mobile/"${kind#store-}"/universal/* dist/release/
     ;;
   edge) bash scripts/package-edge-release.sh ;;
   serverless)
@@ -83,7 +81,8 @@ case "$kind" in
     if [ "$kind" = headless ]; then
       export ARTIFACT_NAME="$(jq -r --arg target "$TARGET_TRIPLE" '.include[] | select(.target==$target) | .headless_artifact' scripts/release-targets.json)"
       export GPROXY_HEADLESS=true PACKAGE_INSTALLERS=false
-      features=(--locked --no-default-features --features channels,memory,fs,bundled-vocabulary)
+      [ "$TARGET_OS" != android ] || PACKAGE_INSTALLERS=true
+      features=(--locked --no-default-features --features channels,memory,fs,bundled-vocabulary,postgres,mysql)
     fi
     case "$BUILDER" in
       cargo-alpine) bash scripts/build-musl.sh "$TARGET_TRIPLE" ;;
@@ -101,22 +100,18 @@ case "$kind" in
     esac
     binary="target/$TARGET_TRIPLE/release/gproxy"
     [ "$TARGET_OS" != windows ] || binary+=.exe
+    if [ "$UPX_ENABLED" = true ]; then
+      upx --best --lzma "$binary"
+      upx --test "$binary"
+    fi
     if [ "$TARGET_OS" = linux ] && [ "$kind" = cli ]; then
       mkdir -p "dist/container/$TARGET_TRIPLE"
       cp "$binary" "dist/container/$TARGET_TRIPLE/gproxy"
     fi
-    if [ "$UPX_ENABLED" = true ]; then
-      args=(--best --lzma)
-      [ "$TARGET_TRIPLE" != aarch64-pc-windows-msvc ] || args=(--best --nrv2e)
-      upx "${args[@]}" "$binary"
-      upx --test "$binary"
-    fi
     if [ "$TARGET_OS" = macos ]; then codesign --force --sign - --timestamp=none "$binary"; fi
     if [ "$TARGET_OS" = windows ]; then
       pwsh -NoProfile -File scripts/package-native-release.ps1
-      if [ "$kind" = cli ]; then
-        pwsh -NoProfile -File scripts/package-windows-msix.ps1 -Target "$TARGET_TRIPLE" -Artifact "$ARTIFACT_NAME" -Version "$GPROXY_BUILD_VERSION" -Mode cli -OutputDir dist/release
-      fi
+      pwsh -NoProfile -File scripts/package-windows-msix.ps1 -Target "$TARGET_TRIPLE" -Artifact "$ARTIFACT_NAME" -Version "$GPROXY_BUILD_VERSION" -Mode "$kind" -OutputDir dist/release
     else
       bash scripts/package-native-release.sh
     fi

@@ -1,5 +1,7 @@
 {
   "shell": {
+    "personal": "個人",
+    "admin": "管理",
     "navigation": "導覽",
     "resizeHint": "拖曳調整寬度，按兩下恢復預設；也可使用方向鍵調整。",
     "skipToContent": "跳至主要內容",
@@ -23,7 +25,7 @@
     "members": "成員",
     "new": "新建",
     "remove": "移除",
-    "retire": "停用",
+    "retire": "註銷",
     "reveal": "檢視",
     "revoke": "撤銷",
     "rotate": "輪換",
@@ -41,6 +43,8 @@
     "loading": "載入中…"
   },
   "form": {
+    "vertexSecretHint": "貼上完整的 Google 服務帳戶 JSON，包含 client_email、private_key；供應商未設定專案時還需 project_id。首次請求會自動換取存取權杖。",
+    "awsSecretHint": "API Key：貼上 Bedrock API 金鑰。存取金鑰對：貼上包含 access_key_id、secret_access_key 的 JSON，session_token 為選填。",
     "all": "全部",
     "useCustom": "使用「{{value}}」",
     "choose": "請選擇…",
@@ -65,7 +69,7 @@
   "confirm": {
     "deleteTitle": "刪除 {{name}}？",
     "removeMemberTitle": "移除 {{name}}？",
-    "retireTitle": "停用 {{name}}？",
+    "retireTitle": "註銷 {{name}}？",
     "revokeTitle": "結束工作階段 {{name}}？",
     "revokeGrantTitle": "撤銷 {{name}}？",
     "rotateTitle": "輪換 {{name}} 並停用舊金鑰？"
@@ -75,7 +79,7 @@
     "created": "已建立",
     "deleted": "已刪除",
     "removed": "已移除",
-    "retired": "已停用",
+    "retired": "已註銷",
     "revoked": "已撤銷",
     "saved": "已儲存",
     "notifications": "通知"
@@ -83,7 +87,8 @@
   "language": {
     "en": "English",
     "zh-CN": "简体中文",
-    "zh-TW": "繁體中文"
+    "zh-TW": "繁體中文",
+    "ru": "Русский"
   },
   "theme": {
     "label": "主題",
@@ -207,6 +212,7 @@
     "refreshCount": "更新次數",
     "requestId": "請求 ID",
     "requests": "請求數",
+    "responseModel": "回應模型",
     "responseStatus": "狀態碼",
     "retainSecret": "保留金鑰原文",
     "management": "管理權限",
@@ -260,11 +266,9 @@
     "sessionAffinity": "路由工作階段親和",
     "maxAttempts": "最大嘗試次數",
     "currency": "幣別",
-    "cacheCreation5mTokens": "快取寫入（5 分鐘）",
-    "cacheCreation30mTokens": "快取寫入（30 分鐘）",
-    "cacheCreation1hTokens": "快取寫入（1 小時）",
     "averageOutputTps": "平均輸出 TPS",
-    "cacheHitRate": "快取命中率"
+    "cacheHitRate": "快取命中率",
+    "cacheCreationTokens": "快取寫入"
   },
   "oauthConsent": {
     "authorizeTitle": "授權存取",

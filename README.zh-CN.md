@@ -4,27 +4,29 @@
 
 **把不同的大模型服务接到同一个 API 入口。**
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Русский](README.ru.md)
 
 [![Release](https://img.shields.io/github/v/release/LeenHawk/gproxy)](https://github.com/LeenHawk/gproxy/releases/latest)
 [![CI](https://github.com/LeenHawk/gproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/LeenHawk/gproxy/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FLeenHawk%2Fgproxy.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FLeenHawk%2Fgproxy?ref=badge_shield)
 [![Stars](https://img.shields.io/github/stars/LeenHawk/gproxy?style=flat)](https://github.com/LeenHawk/gproxy/stargazers)
 
 [文档](https://gproxy.leenhawk.com/zh-cn/) · [下载](https://github.com/LeenHawk/gproxy/releases) · [讨论](https://github.com/LeenHawk/gproxy/discussions) · [赞助](https://github.com/sponsors/LeenHawk)
 
 [![Documentation](https://img.shields.io/badge/文档-gproxy.leenhawk.com-2563eb?style=for-the-badge)](https://gproxy.leenhawk.com/zh-cn/)
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev%2Fdeploy%2Fcloudflare-button)
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy&branch=dev&create_from_path=deploy%2Fserverless)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev%2Fdeploy%2Fserverless&project-name=gproxy&repository-name=gproxy&env=GPROXY_ADMIN_PASSWORD%2CGPROXY_MASTER_KEY&products=%5B%7B%22type%22%3A%22integration%22%2C%22group%22%3A%22postgres%22%2C%22protocol%22%3A%22storage%22%7D%5D)
-[![Deploy to Deno](https://img.shields.io/badge/Deploy_to-Deno-000000?style=for-the-badge&logo=deno)](https://console.deno.com/new?clone=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy&path=deploy%2Fserverless)
+<a href="https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev%2Fdeploy%2Fcloudflare-button"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" height="32"></a>
+<a href="https://app.netlify.com/start/deploy?repository=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy&branch=dev&create_from_path=deploy%2Fserverless"><img src="https://www.netlify.com/img/deploy/button.svg" alt="Deploy to Netlify" height="32"></a>
+<a href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev%2Fdeploy%2Fserverless&project-name=gproxy&repository-name=gproxy&env=GPROXY_ADMIN_PASSWORD%2CGPROXY_MASTER_KEY&products=%5B%7B%22type%22%3A%22integration%22%2C%22group%22%3A%22postgres%22%2C%22protocol%22%3A%22storage%22%7D%5D"><img src="https://vercel.com/button" alt="Deploy with Vercel" height="32"></a>
+<a href="https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="32"></a>
+<a href="https://heroku.com/deploy?template=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev"><img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy to Heroku" height="32"></a>
 
 </div>
 
 GPROXY 是用 Rust 编写、可自行部署的 LLM API 网关。把上游账户接进来，在控制台配置模型路由，客户端就可以用同一组地址和网关 API Key 调用不同服务。切换供应商、更新凭证、查看用量和费用，都在网关里完成。
 
-v4 提供带设置向导的桌面与移动应用，也可以作为命令行服务、容器运行，或部署到 Cloudflare、Netlify、Vercel 和 Deno。正式使用下载[最新稳定版](https://github.com/LeenHawk/gproxy/releases/latest)；开发快照见 [nightly](https://github.com/LeenHawk/gproxy/releases/tag/nightly)。
+v4 提供带设置向导的桌面与移动应用，也可以作为命令行服务、容器运行，或部署到 Cloudflare、Netlify 和 Vercel。正式使用下载[最新稳定版](https://github.com/LeenHawk/gproxy/releases/latest)；开发快照见 [nightly](https://github.com/LeenHawk/gproxy/releases/tag/nightly)。
 
 ## 能做什么
 
@@ -56,7 +58,7 @@ v4 提供带设置向导的桌面与移动应用，也可以作为命令行服�
 </td>
 <td valign="top">
 <h3>本地或服务器部署</h3>
-<p>个人使用可选带界面的应用，服务器可用 CLI 或容器，也可部署到 Cloudflare、Netlify、Vercel 和 Deno。Rust 项目可通过 SDK 嵌入网关能力。</p>
+<p>个人使用可选带界面的应用，服务器可用 CLI 或容器，也可部署到 Cloudflare、Netlify 和 Vercel。Rust 项目可通过 SDK 嵌入网关能力。</p>
 </td>
 </tr>
 </table>
@@ -71,18 +73,18 @@ v4 提供带设置向导的桌面与移动应用，也可以作为命令行服�
 
 **供应商与模型** — 在同一页面管理上游账户和模型目录。
 
-![供应商与模型管理](docs/images/readme/providers-zh-CN.webp)
+![供应商与模型管理](.github/readme/providers-zh-CN.webp)
 
 <details>
 <summary>查看模型路由与请求规则</summary>
 
 **模型路由** — 为固定模型名配置供应商、权重和回退层级。
 
-![模型路由管理](docs/images/readme/routes-zh-CN.webp)
+![模型路由管理](.github/readme/routes-zh-CN.webp)
 
 **请求规则** — 为供应商设置系统提示词和缓存断点。
 
-![请求规则配置](docs/images/readme/rules-zh-CN.webp)
+![请求规则配置](.github/readme/rules-zh-CN.webp)
 
 </details>
 
@@ -124,31 +126,11 @@ curl -sS http://127.0.0.1:8787/v1/chat/completions \
 
 ### 托管平台一键部署
 
-Cloudflare、Netlify、Vercel 和 Deno 的模板使用 **latest 稳定版** 预编译包，无需编译 Rust。Cloudflare 可选 D1 或 libSQL/Turso；其他三个平台使用 PostgreSQL。填写数据库连接、管理员密码和主密钥后部署，再打开 `/console/` 登录。
+Cloudflare、Netlify 和 Vercel 的模板使用 **latest 稳定版** 预编译包，无需编译 Rust。Cloudflare 可选 D1 或 libSQL/Turso；其他两个平台使用 PostgreSQL。填写数据库连接、管理员密码和主密钥后部署，再打开 `/console/` 登录。
 
 部署入口、平台数据库与外部数据库的选择，以及 WebSocket 等能力差异，统一见[托管平台部署指南](https://gproxy.leenhawk.com/zh-cn/deployment/edge/)。
 
-以下三个模板使用 **latest 稳定版** PostgreSQL 预编译程序与轻量容器。部署前请核对应用和数据库的付费套餐。
-
-<table>
-<tr>
-<td width="33%" valign="top">
-<h3>Render</h3>
-<p>Starter 服务 + Basic PostgreSQL，自动绑定数据库并生成密码与主密钥。</p>
-<p><a href="https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev"><strong>部署到 Render →</strong></a></p>
-</td>
-<td width="33%" valign="top">
-<h3>Heroku</h3>
-<p>Basic dyno + Essential PostgreSQL，填写主密钥后自动创建应用和数据库。</p>
-<p><a href="https://heroku.com/deploy?template=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev"><strong>部署到 Heroku →</strong></a></p>
-</td>
-<td width="33%" valign="top">
-<h3>Northflank</h3>
-<p>导入模板即可创建项目、PostgreSQL 和服务；目前需手动导入，尚无公开分享链接。</p>
-<p><a href="https://gproxy.leenhawk.com/zh-cn/deployment/containers/#northflank"><strong>导入模板 →</strong></a></p>
-</td>
-</tr>
-</table>
+Render 和 Heroku 模板使用 **latest 稳定版** PostgreSQL 预编译程序与轻量容器。Render 使用免费 Web 服务并连接你自己的 PostgreSQL；Heroku 自动创建 Basic dyno 和 Essential PostgreSQL。部署前请核对应用和数据库的套餐。
 
 [初始化与运行说明](https://gproxy.leenhawk.com/zh-cn/deployment/containers/)
 
@@ -156,10 +138,10 @@ Cloudflare、Netlify、Vercel 和 Deno 的模板使用 **latest 稳定版** 预�
 
 | 方式 | 适用场景 | 入口 |
 | --- | --- | --- |
-| Application | 桌面或移动设备，应用内管理 | [平台安装说明](https://gproxy.leenhawk.com/zh-cn/getting-started/installation/) |
-| CLI / 容器 | 常驻服务器，浏览器管理 | [安装与容器配置](https://gproxy.leenhawk.com/zh-cn/getting-started/installation/) |
-| Cloudflare / Netlify / Vercel / Deno | 托管平台，无需自备服务器 | [部署指南](https://gproxy.leenhawk.com/zh-cn/deployment/edge/) |
-| Northflank / Render / Heroku | 原生容器与托管 PostgreSQL | [部署指南](https://gproxy.leenhawk.com/zh-cn/deployment/containers/) |
+| Application | 桌面或移动设备，应用内管理 | [下载与安装](https://gproxy.leenhawk.com/zh-cn/download/) |
+| CLI / 容器 | 常驻服务器，浏览器管理 | [下载与安装](https://gproxy.leenhawk.com/zh-cn/download/) |
+| Cloudflare / Netlify / Vercel | 托管平台，无需自备服务器 | [部署指南](https://gproxy.leenhawk.com/zh-cn/deployment/edge/) |
+| Render / Heroku | 原生容器与托管 PostgreSQL | [部署指南](https://gproxy.leenhawk.com/zh-cn/deployment/containers/) |
 | Rust SDK | 嵌入自己的程序 | [gproxy-sdk](crates/gproxy-sdk/README.zh-CN.md) |
 
 Windows 可从 Microsoft Store 安装两个版本：
@@ -219,7 +201,7 @@ pnpm 或桌面库：
 
 ```sh
 cargo build --locked --release -p gproxy --bin gproxy \
-  --no-default-features --features channels,memory,fs,bundled-vocabulary
+  --no-default-features --features channels,memory,fs,bundled-vocabulary,postgres,mysql
 ./target/release/gproxy serve --console=false
 ```
 
@@ -245,9 +227,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 pnpm --dir console lint
 pnpm --dir console test
+git submodule update --init docs
 pnpm --dir docs install --frozen-lockfile
 pnpm --dir docs check
-pnpm --dir docs build
 ```
 
 桌面和 WASM 的独立检查见[从源码构建](https://gproxy.leenhawk.com/zh-cn/deployment/release-build/)。工作区结构见[架构](https://gproxy.leenhawk.com/zh-cn/introduction/architecture/)，扩展方式见[新增渠道](https://gproxy.leenhawk.com/zh-cn/guides/adding-a-channel/)。
@@ -257,6 +239,10 @@ pnpm --dir docs build
 ## 许可
 
 网关应用使用 **AGPL-3.0-or-later**，见 [LICENSE](LICENSE)。`gproxy-protocol`、`gproxy-protocol-macros`、`gproxy-client`、`gproxy-cache`、`gproxy-file`、`gproxy-seaorm` 和 `gproxy-tokenizer` 使用 **MIT**，各自目录包含许可证。
+
+## 工具支持
+
+[![JetBrains Logo](https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg)](https://jb.gg/OpenSource)
 
 ## Star History
 

@@ -16,16 +16,17 @@ No concrete channel is compiled by default; each is a Cargo feature:
 
 | Feature | Id | Upstream | Credential |
 |---|---|---|---|
-| `aistudio` | `aistudio` | Google AI Studio: the native Gemini methods and the `/v1beta/openai` compatibility layer off one origin, SSE and JSON-array streams, `usageMetadata` metering | `{"api_key"}` |
+| `aistudio` | `aistudio` | Google AI Studio: native Gemini HTTP and Live WebSockets, the `/v1beta/openai` compatibility layer, SSE/JSON-array streams and HTTP `usageMetadata` metering | `{"api_key"}` |
 | `antigravity` | `antigravity` | A Google account through the Code Assist host the Antigravity editor talks to: PKCE login that discovers the Cloud project and tier, refresh, the Code Assist request envelope, `fetchAvailableModels` catalogue and per-model quota | `OAuthCredential` |
 | `aws_bedrock` | `aws_bedrock` | AWS Bedrock: SigV4-signed (or API-key) calls on `bedrock-runtime` with the wire chosen per model — `InvokeModel` for Anthropic models, event-stream replies translated into Claude Messages SSE, and the OpenAI-compatible Chat Completions for the rest — plus the control plane's foundation-model directory | AWS access key pair (optionally temporary) or a Bedrock API key |
 | `azure` | `azure` | Azure OpenAI and the Anthropic models Azure AI Foundry hosts: the v1 or the deployment-scoped surface under a resource, `api-key` and `x-api-key` | `{"api_key"}` |
 | `claudeapi` | `claudeapi` | Anthropic's own API: `x-api-key` Messages with the API's request hygiene and server-side fallback, the OpenAI SDK compatibility layer, `anthropic-ratelimit-*` headers, `/v1/organizations/cost_report` | `{"api_key", "quota_api_key"}` |
-| `claudecode` | `claudecode` | Claude.ai subscription through the Claude Code CLI's Messages requests: PKCE and cookie login, refresh, unified rate-limit headers, `/api/oauth/usage`, CLI services | `OAuthCredential` |
-| `claudeweb` | `claudeweb` | claude.ai browser session: cookie login against `/api/bootstrap`, multi-call conversation turns rendered as Claude Messages SSE, organization usage windows | session cookie + organization |
+| `claudecode` | `claudecode` | Claude.ai subscription through the Claude Code CLI's Messages requests: PKCE and cookie import, refresh, unified rate-limit headers, `/api/oauth/usage`, CLI services | `OAuthCredential` |
+| `claudeweb` | `claudeweb` | claude.ai browser session: cookie import against `/api/bootstrap`, multi-call conversation turns rendered as Claude Messages SSE, organization usage windows | session cookie + organization |
 | `cline` | `cline` | Cline's own account at `api.cline.bot`: a WorkOS device login registered with Cline, a `workos:`-prefixed bearer, the SDK's attribution headers, the `{success, data}` envelope its replies arrive in, its recommended-model groups, plan windows and credit balance | `{"api_key"}` or `OAuthCredential` |
 | `cloudflare_ai_gateway` | `cloudflare_ai_gateway` | Cloudflare AI Gateway through the Cloudflare REST API: `/client/v4/accounts/{account}/ai` with the account and `cf-aig-gateway-id` taken from the credential, one bearer on Chat, Responses and Claude Messages, the account's credit balance | `{"api_key", "account_id", "gateway_id"?}` |
 | `codex` | `codex` | ChatGPT account through the Codex backend: OAuth (PKCE and device code), Responses over HTTP SSE and WebSocket, `x-codex-*` limit headers, `/wham/usage`, CLI backend services | `OAuthCredential` |
+| `commandcode` | `commandcode` | Command Code CLI: `/alpha/generate` NDJSON translated to Claude Messages, public model catalogue, credit balance, billing-period spend/request counts and usage windows | `{"api_key"}` or browser authorization (paste the issued key) |
 | `copilotcli` | `copilotcli` | GitHub Copilot through the `copilot` CLI: a GitHub device login whose long-lived token is exchanged by `CredentialRefresh` for the short-lived Copilot token, the CLI's editor identity, the seat's origin, `copilot_internal/user` quota snapshots | GitHub OAuth token (+ minted Copilot token) |
 | `custom` | `custom` | Any API-key endpoint speaking OpenAI, Claude or Gemini natively | `{"api_key"}` |
 | `dashscope` | `dashscope` | Alibaba DashScope: the OpenAI-compatible mode, the Anthropic-compatible mode, a rerank prefix of its own and the native multimodal-generation image API, all on one origin | `{"api_key"}` |
@@ -33,6 +34,8 @@ No concrete channel is compiled by default; each is a Cargo feature:
 | `glm` | `glm` | GLM pay-as-you-go API; live official ZCode model catalogue | `{"api_key"}` |
 | `glm` | `glmcode` | GLM Coding Plan; separate catalogue, Chat / Messages / Responses and subscription quota | `{"api_key"}` |
 | `minimax` | `minimax` | MiniMax text API / Token Plan and H3 video creation, query, list, cancellation/deletion and download | `{"api_key"}` |
+| `volcengine` | `volcengine_agent` | Ark Agent Plan: Chat / Messages / Responses, dynamic models, AFP quota, embeddings, images, video tasks and HTTP TTS | API key; optional IAM AK/SK for control APIs |
+| `volcengine` | `volcengine_coding` | Ark Coding Plan: Chat / Messages / Responses, dynamic models, embeddings, personal quota windows and enterprise seat usage | API key; optional IAM AK/SK for control APIs |
 | `devin` | `devin` | Devin (Windsurf) at `server.codeium.com`: Connect-RPC over protobuf rather than JSON, `GetChatMessage` frames translated into Chat Completions SSE, `GetUserStatus` daily and weekly windows | session token |
 | `geminicli` | `geminicli` | A Google account through the Code Assist endpoints the Gemini CLI talks to: PKCE login that discovers the Cloud project and tier, refresh, the Code Assist request envelope, `retrieveUserQuota` catalogue and per-model quota | `OAuthCredential` |
 | `grokbuild` | `grokbuild` | An xAI account through the Grok Build CLI: device login at `auth.x.ai`, refresh, a narrowed Responses body on `cli-chat-proxy.grok.com`, xAI's own media paths on `api.x.ai`, `/billing?format=credits` | `OAuthCredential` |
@@ -45,7 +48,8 @@ No concrete channel is compiled by default; each is a Cargo feature:
 | `openrouter` | `openrouter` | OpenRouter: provider routing preferences filled into the body, `HTTP-Referer`/`X-Title` attribution, the price the reply says it charged, `/v1/auth/key` | `{"api_key"}` |
 | `vercel` | `vercel` | Vercel AI Gateway: Chat, Responses, Claude Messages and embeddings, dual key headers, the team's `/v1/credits` balance | `{"api_key"}` |
 | `vertex` | `vertex` | Google Vertex AI: regional project-scoped methods for the Google, Anthropic and OpenAI-compatible publishers; a service-account key exchanged for an access token through `CredentialRefresh` | Google service-account key |
-| `vertexexpress` | `vertexexpress` | Vertex AI Express mode: the Gemini surface on one global origin, key in the query, no project and no region | `{"api_key"}` |
+| `vertexexpress` | `vertexexpress` | Vertex AI Express mode: the Gemini surface with a global default and optional regional origin, key in the query, no project | `{"api_key"}` |
+| `trae` | `trae` | Trae China / international desktop: browser PKCE login, device-signed refresh, native raw chat translated to OpenAI Chat, account model catalogue and entitlement usage | `OAuthCredential` |
 | `workbuddy` | `workbuddy` | Tencent Copilot through its editor plugin: device login, refresh, OpenAI Chat under `/v2` with the plugin's identity and account headers, the `/v3/config` catalogue, the enterprise and personal billing meters | `OAuthCredential` |
 | `xai` | `xai` | xAI (Grok): OpenAI Chat and Responses plus xAI's own `/v1/tts`, `/v1/stt` and `/v1/videos/generations`, `cost_in_usd_ticks` metering, the management billing probe | `{"api_key"}` |
 
@@ -119,6 +123,23 @@ That mint is `CredentialRefresh` — the GitHub token is the refresh token and
 the Copilot token the access token — because `prepare` is synchronous and pure
 and would otherwise re-mint on every request. The login's final step performs
 the first mint, so the credential the host persists is usable at once.
+
+Trae uses one `trae` channel. Set `config.international` to `true` for the
+international edition; the default is mainland China. Browser login uses the
+host's existing authorization-result flow: after authorization, paste the full
+loopback callback address into the Console even if that page cannot open.
+No Trae installation or local callback listener is required. Each credential
+keeps its device signing key sealed; imported tokens without that key cannot
+use the device-bound refresh flow. Models come from the account's `chat_v3`
+catalogue. Quota observations are separate from per-request token usage.
+See [the protocol audit](src/channels/trae/README.md) for evidence and validation limits.
+
+For `workbuddy`, set provider config to `{"international": true}` to select
+WorkBuddy AI at `https://www.workbuddy.ai` with login platform `workbuddy-ai`.
+Omitting the option keeps the mainland service at `https://copilot.tencent.com`
+and platform `workbuddy`. An explicit provider `base_url` overrides either
+default origin without changing the selected login platform. This option
+selects the region; it does not update the existing billing API integration.
 
 `kiro`, `workbuddy` and `grokbuild` are three more CLI impersonation
 channels, and share nothing but that shape: each is one vendor's coding tool,
@@ -227,10 +248,9 @@ offering a reset).
 
 | Accessor | Trait | Purpose |
 |---|---|---|
-| `credential_refresh` | `CredentialRefresh` | Produce a full replacement secret and expiry; the host persists it with a CAS on `version` |
+| `credential_refresh` | `CredentialRefresh` | Produce a full replacement secret, expiry and optional public metadata; the host persists it with a CAS on `version` |
 | `oauth_authorization_code` | `OAuthAuthorizationCode` | `authorize` builds the URL for a host-supplied PKCE challenge and state; `exchange` turns the code into an `OAuthCredential` |
 | `oauth_device_code` | `OAuthDeviceCode` | `start` and one `poll` step; scheduling belongs to the host |
-| `cookie_login` | `CookieLogin` | Exchange a pasted cookie for an `AcquiredCredential` (secret plus public metadata) |
 | `quota_model` | `QuotaModel` | Synchronous, pure: the `QuotaDimension`s a credential has, derived from `auth_kind` and metadata |
 | `quota_query` | `QuotaQuery` | Read a `QuotaSnapshot` from the upstream's usage endpoint |
 | `quota_headers` | `QuotaHeaders` | Turn response headers into `QuotaEntry`s; empty means nothing reported |
@@ -315,7 +335,7 @@ behind its own feature. The steps, using `custom` (API key) and `codex`
      mod.rs        ID, the unit struct, re-exports, module doc with wire facts
      config.rs     AcmeConfig: provider `config` JSON, serde(default), unknown keys ignored
      request.rs    impl BaseChannel: prepare / prepare_connect / overridden operations
-     oauth.rs      OAuthAuthorizationCode, OAuthDeviceCode, CookieLogin, CredentialRefresh
+     oauth.rs      OAuthAuthorizationCode, OAuthDeviceCode, CredentialRefresh
      quota.rs      QuotaModel, QuotaQuery, QuotaHeaders
      usage.rs      UsageExtras, UsageSource
      services.rs   ChannelServices routes and handlers

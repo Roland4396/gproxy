@@ -163,6 +163,21 @@ pub(super) fn responses_settings(
     )
 }
 
+/// Cache controls are projected by the Chat and Claude request converters.
+/// Keep those effective defaults for buffered and streamed Responses replies.
+fn responses_cache_settings(
+    input: &r::GenerateContentRequestBody,
+    default_mode: r::PromptCachingMode,
+) -> Option<r::ResponsePromptCacheOptions> {
+    input.prompt_cache_options.as_ref().map(|options| {
+        r::ResponsePromptCacheOptions::builder(
+            options.mode.unwrap_or(default_mode),
+            options.ttl.unwrap_or(r::PromptCacheTtl::ThirtyMinutes),
+        )
+        .build()
+    })
+}
+
 /// Responses client over a Chat upstream: the response context echoes the
 /// client's effective controls.
 pub(super) fn responses_over_chat_context(
@@ -174,7 +189,10 @@ pub(super) fn responses_over_chat_context(
         effective_parallel_tool_calls: parallel_tool_calls,
         effective_tool_choice: tool_choice,
         usage: Default::default(),
-        effective_prompt_cache_options: None,
+        effective_prompt_cache_options: responses_cache_settings(
+            input,
+            r::PromptCachingMode::Implicit,
+        ),
     }
     .into()
 }
@@ -206,7 +224,10 @@ pub(super) fn responses_over_claude_facts(
                 ..Default::default()
             },
             created_at: created,
-            effective_prompt_cache_options: None,
+            effective_prompt_cache_options: responses_cache_settings(
+                input,
+                r::PromptCachingMode::Explicit,
+            ),
         }
         .into(),
     }
@@ -312,18 +333,30 @@ pub(super) fn transport(error: TransformError) -> TransportError {
 /// a generic function: `StreamInvocation::next` is only `Send` per concrete
 /// bridge, which a generic bound cannot express.
 macro_rules! drive {
-    ($invocation:expr, $owned:expr) => {{
-        let invocation = $invocation;
+    ($invocation:expr, $owned:expr, $dialect:expr, $framing:expr) => {{
+        // Keep the large per-protocol invocation out of the stream driver's
+        // stack frame (notably Chat -> Responses on a default Tokio worker).
+        let invocation = Box::new($invocation);
         let owned = $owned;
+        let dialect = $dialect;
+        let framing = $framing;
         let stream: ByteStream = Box::pin(futures_util::stream::unfold(
-            Some((invocation, owned)),
-            |slot| async move {
-                let (mut invocation, owned) = slot?;
+            Some((invocation, owned, 0i64)),
+            move |slot| async move {
+                let (mut invocation, owned, sequence) = slot?;
                 let next = invocation.next(&owned.access()).await;
                 match next {
-                    Ok(Some(chunk)) => Some((Ok(chunk.bytes), Some((invocation, owned)))),
+                    Ok(Some(chunk)) => {
+                        let sequence = sequence + i64::from(chunk.event.is_some());
+                        Some((Ok(chunk.bytes), Some((invocation, owned, sequence))))
+                    }
                     Ok(None) => None,
-                    Err(error) => Some((Err(transport(error)), None)),
+                    Err(error) => Some((
+                        Err(super::stream_error::converted(
+                            error, dialect, framing, sequence,
+                        )),
+                        None,
+                    )),
                 }
             },
         ));
@@ -383,6 +416,8 @@ async fn invoke_stream<C: BatchConnectionTrait + Send + Sync + 'static>(
     };
     let created = call.now_ms.div_euclid(1000);
     let model = state.target.model.clone();
+    let (media, media_scope) = call.resources();
+    let resources = &call.generation_resources(&media, &media_scope);
 
     if candidate_count(client, body) >= 2 {
         let fanout_target = FanoutTarget {
@@ -397,12 +432,13 @@ async fn invoke_stream<C: BatchConnectionTrait + Send + Sync + 'static>(
             ($pair:ty, $input:ty $(, |$index:ident| $ctx:expr)?) => {{
                 Box::pin(async move {
                     let input: $input = decode(body, limits)?;
-                    let mut fanout = Box::pin(<$pair>::prepare_stream(
+                    let mut fanout = Box::pin(<$pair>::prepare_stream_with_capabilities(
                         input,
                         fanout_target,
                         $(|$index: usize| $ctx,)?
                         settings,
                         state,
+                        resources,
                     ))
                     .await?;
                     if call.collect {
@@ -416,16 +452,17 @@ async fn invoke_stream<C: BatchConnectionTrait + Send + Sync + 'static>(
                     let owned = OwnedState::capture(call, state);
                     let upstream = upstream.clone();
                     let stream: ByteStream = Box::pin(futures_util::stream::unfold(
-                        Some((fanout, owned, upstream)),
+                        Some((fanout, owned, upstream, 0i64)),
                         move |slot| async move {
-                            let (mut fanout, owned, upstream) = slot?;
+                            let (mut fanout, owned, upstream, sequence) = slot?;
                             let next = fanout.next(&upstream, &key, &owned.access()).await;
                             match next {
                                 Ok(Some(chunk)) => {
-                                    Some((Ok(chunk.bytes), Some((fanout, owned, upstream))))
+                                    let sequence = sequence + i64::from(chunk.event.is_some());
+                                    Some((Ok(chunk.bytes), Some((fanout, owned, upstream, sequence))))
                                 }
                                 Ok(None) => None,
-                                Err(error) => Some((Err(transport(error)), None)),
+                                Err(error) => Some((Err(super::stream_error::converted(error, client, client_framing, sequence)), None)),
                             }
                         },
                     ));
@@ -473,8 +510,8 @@ async fn invoke_stream<C: BatchConnectionTrait + Send + Sync + 'static>(
             Box::pin(async move {
                 let $input_name: $input = decode(body, limits)?;
                 let context = $ctx;
-                let invocation = Box::pin(<$pair>::prepare_stream(
-                    $input_name, stream_target, context, settings, state,
+                let invocation = Box::pin(<$pair>::prepare_stream_with_capabilities(
+                    $input_name, stream_target, context, settings, state, resources,
                 ))
                 .await?;
                 run!(@start invocation)
@@ -484,8 +521,8 @@ async fn invoke_stream<C: BatchConnectionTrait + Send + Sync + 'static>(
         ($pair:ty, $input:ty) => {{
             Box::pin(async move {
                 let input: $input = decode(body, limits)?;
-                let invocation = Box::pin(<$pair>::prepare_stream(
-                    input, stream_target, settings, state,
+                let invocation = Box::pin(<$pair>::prepare_stream_with_capabilities(
+                    input, stream_target, settings, state, resources,
                 ))
                 .await?;
                 run!(@start invocation)
@@ -504,7 +541,7 @@ async fn invoke_stream<C: BatchConnectionTrait + Send + Sync + 'static>(
                     Ok(Converted::Stream(WireResponse {
                         status: head.status,
                         headers: head.headers,
-                        body: drive!(invocation, owned),
+                        body: drive!(invocation, owned, client, settings.client_framing),
                     }))
                 }
             }
@@ -818,9 +855,11 @@ async fn collect_native<C: BatchConnectionTrait + Send + Sync>(
                 TargetIdPolicy::new(call.target),
                 settings.events,
             );
-            while let Some(frame) = reader.next::<$event>().await.map_err(codec)? {
+            while let Some(frame) = reader.next::<serde_json::Value>().await.map_err(codec)? {
                 match frame {
-                    NativeFrame::Event { value, .. } => <$event>::collect(&mut collector, value)?,
+                    NativeFrame::Event { value, .. } => {
+                        <$event>::collect(&mut collector, <$event>::decode(value)?)?
+                    }
                     NativeFrame::Done => <$event>::collect_done(&mut collector)?,
                 }
             }
@@ -961,6 +1000,8 @@ async fn invoke_complete<C: BatchConnectionTrait + Send + Sync>(
     let identities = GenerationIdentity::new(namespace(), namespace(), client, target)?;
     let created = call.now_ms.div_euclid(1000);
     let synthesizing = matches!(completion, Completion::Synthesize { .. });
+    let (media, media_scope) = call.resources();
+    let resources = &call.generation_resources(&media, &media_scope);
 
     if candidate_count(client, body) >= 2 {
         let fanout_target = || FanoutTarget {
@@ -979,8 +1020,10 @@ async fn invoke_complete<C: BatchConnectionTrait + Send + Sync>(
                 let fanout_target = fanout_target();
                 return Box::pin(async move {
                     let mut prepared =
-                        <$pair>::prepare(input, fanout_target, state $(, $extra)*)
-                            .await?;
+                        <$pair>::prepare_with_capabilities(
+                            input, fanout_target, state, resources $(, $extra)*
+                        )
+                        .await?;
                     let mut progress = FanoutProgress::default();
                     let converted = prepared
                         .invoke(upstream, &key, limits, state, &mut progress, $facts)
@@ -1044,12 +1087,14 @@ async fn invoke_complete<C: BatchConnectionTrait + Send + Sync>(
             // Boxed per pair to keep the dispatch frame small.
             Box::pin(async move {
                 let mut prepared = if synthesizing {
-                    <$pair>::prepare_for_stream_synthesis(
-                        input, endpoint, identities, state $(, $synth_extra)*
+                    <$pair>::prepare_for_stream_synthesis_with_capabilities(
+                        input, endpoint, identities, state, resources $(, $synth_extra)*
                     ).await?
                 } else {
-                    <$pair>::prepare_with_state(input, endpoint, identities, state $(, $extra)*)
-                        .await?
+                    <$pair>::prepare_with_capabilities(
+                        input, endpoint, identities, state, resources $(, $extra)*
+                    )
+                    .await?
                 };
                 let mut progress = GenerationProgress::default();
                 let outcome = prepared

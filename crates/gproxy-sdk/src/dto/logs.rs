@@ -24,6 +24,7 @@ use super::UsageRecordDto;
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum LogBodyEncoding {
     /// Valid UTF-8.
     Utf8,
@@ -36,6 +37,7 @@ pub enum LogBodyEncoding {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LogBodyDto {
     /// The record's own `body_state`: `not_captured`, `recording`,
     /// `complete`, `partial` or `failed`. `not_captured` with zero bytes is a
@@ -45,7 +47,7 @@ pub struct LogBodyDto {
     pub encoding: LogBodyEncoding,
     /// Compatibility field: false, because reads return the complete stored payload.
     pub truncated: bool,
-    /// Bytes stored on the row, not the length of `content`.
+    /// Reconstructed body bytes, not the length of `content`.
     pub bytes: u64,
     pub content: String,
 }
@@ -87,6 +89,7 @@ impl LogBodyDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LogEntryDto {
     /// Capture ID. For downstream rows this is also the request ID;
     /// upstream rows have their own physical exchange ID.
@@ -145,6 +148,7 @@ impl From<capture_record::Model> for LogEntryDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LogPageDto {
     pub items: Vec<LogEntryDto>,
     /// The `started_at_ms` of the last item, or None at the end of the list.
@@ -161,6 +165,7 @@ pub struct LogPageDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CaptureRecordDto {
     pub id: String,
     /// Initiating request for provenance; actual associations are many-to-many.
@@ -188,7 +193,8 @@ pub struct CaptureRecordDto {
     pub request_headers: Option<Value>,
     pub request_body: LogBodyDto,
     /// `buffered`, `bytes`, `sse`, `ndjson`, `json_array` or `websocket`.
-    /// Anything but `buffered` means the body is in the events, not the row.
+    /// HTTP bodies are reconstructed regardless of transport framing;
+    /// WebSocket messages retain their boundaries in the events.
     pub request_framing: String,
     pub response_status: Option<i32>,
     #[cfg_attr(feature = "ts", ts(type = "[string, string][] | null"))]
@@ -213,6 +219,7 @@ pub struct CaptureRecordDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CaptureEventDto {
     pub capture_id: String,
     /// Monotonic across both directions of the exchange or connection.
@@ -231,6 +238,7 @@ pub struct CaptureEventDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LogDetailDto {
     pub downstream: CaptureRecordDto,
     /// Every associated upstream call, ordered by start time, attempt ordinal and ID.
@@ -251,6 +259,7 @@ pub struct LogDetailDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LogQuery {
     pub from_ms: Option<i64>,
     pub to_ms: Option<i64>,
@@ -280,6 +289,7 @@ pub struct LogQuery {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct HistoryDelete {
     pub ids: Vec<String>,
 }
@@ -289,6 +299,7 @@ pub struct HistoryDelete {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct HistoryDeleted {
     pub deleted: u64,
 }
@@ -298,6 +309,7 @@ pub struct HistoryDeleted {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CaptureDetailDto {
     pub record: CaptureRecordDto,
     pub events: Vec<CaptureEventDto>,

@@ -10,7 +10,9 @@
 
 mod support;
 
+use axum::body::Body;
 use gproxy_app::AppConfig;
+use http::Request;
 use http::{Method, StatusCode};
 use serde_json::json;
 use support::{Host, Reply, get, keyed, post, with};
@@ -45,7 +47,7 @@ async fn healthz_answers_without_a_credential_and_names_the_revision() {
 async fn a_data_plane_request_with_no_key_is_401_in_the_product_envelope() {
     let host = instance().await;
     let answer = host
-        .send(post("/v1/messages", json!({"model": "test/m1"})))
+        .send(post("/v1/messages", json!({"model": "p1/m1"})))
         .await;
     assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
     assert_eq!(answer.json()["error"]["code"], "unauthorized");
@@ -71,7 +73,7 @@ async fn a_caller_with_no_permission_is_403_and_costs_no_upstream_call() {
 
     let answer = host
         .send(keyed(
-            post("/v1/messages", json!({"model": "test/m1"})),
+            post("/v1/messages", json!({"model": "p1/m1"})),
             "k-bob",
         ))
         .await;
@@ -86,17 +88,18 @@ async fn a_permitted_call_reaches_the_upstream_and_writes_a_usage_row() {
     use sea_orm::EntityTrait;
 
     let host = instance().await;
+    let reply = json!({"content": [{"type": "text", "text": "hello"}]});
     host.client
-        .script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
+        .script(vec![Reply::Http(StatusCode::OK, reply.clone())]);
 
     let answer = host
         .send(keyed(
-            post("/v1/messages", json!({"model": "test/m1"})),
+            post("/v1/messages", json!({"model": "p1/m1"})),
             "k-alice",
         ))
         .await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.text());
-    assert_eq!(answer.json(), json!({"ok": true}));
+    assert_eq!(answer.json(), reply);
     assert_eq!(host.client.urls(), ["https://p1.example/v1/messages"]);
 
     // The settlement runs as the response body ends, which `send` has already
@@ -110,6 +113,7 @@ async fn a_permitted_call_reaches_the_upstream_and_writes_a_usage_row() {
         .await
         .unwrap();
     assert_eq!(rows.len(), 1, "one physical call, one usage row");
+    assert_eq!(rows[0].output_tokens, Some(3));
     assert_eq!(rows[0].user_id.as_deref(), Some("alice"));
     assert_eq!(rows[0].api_key_id.as_deref(), Some("k-alice"));
     assert_eq!(rows[0].model, "m1");
@@ -238,7 +242,7 @@ async fn an_unknown_first_segment_stays_on_the_aggregated_mount() {
     // — and `/nope/v1/messages` is not a declared surface.
     let answer = host
         .send(keyed(
-            post("/nope/v1/messages", json!({"model": "test/m1"})),
+            post("/nope/v1/messages", json!({"model": "p1/m1"})),
             "k-alice",
         ))
         .await;
@@ -510,7 +514,7 @@ async fn a_zstd_body_is_decoded_before_the_model_is_read() {
     host.client
         .script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
 
-    let body = serde_json::to_vec(&json!({"model": "test/m1"})).unwrap();
+    let body = serde_json::to_vec(&json!({"model": "p1/m1"})).unwrap();
     let compressed = compress_to_vec(body.as_slice(), CompressionLevel::Fastest);
     let request = http::Request::builder()
         .method(Method::POST)
@@ -613,11 +617,13 @@ async fn a_buffered_answer_over_a_socket_settles_as_completed() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let host = instance().await;
-    host.client
-        .script(vec![Reply::Http(StatusCode::OK, json!({ "ok": true }))]);
+    host.client.script(vec![Reply::Http(
+        StatusCode::OK,
+        json!({"content": [{"type": "text", "text": "hello"}]}),
+    )]);
     let bound = host.bind().await;
     let mut socket = tokio::net::TcpStream::connect(bound.address).await.unwrap();
-    let body = json!({ "model": "test/m1" }).to_string();
+    let body = json!({ "model": "p1/m1" }).to_string();
     socket
         .write_all(
             format!(
@@ -677,4 +683,72 @@ async fn a_buffered_answer_over_a_socket_settles_as_completed() {
         "an answer the client received in full is not a cancelled one"
     );
     drop(socket);
+}
+
+#[tokio::test]
+async fn a_multipart_model_routes_and_reaches_the_upstream_unprefixed() {
+    // Live: `openai/gpt-4o-mini-transcribe` in a transcription form reached
+    // OpenAI unchanged, because only JSON bodies were read for the model.
+    let host = instance().await;
+    host.client
+        .script(vec![Reply::Http(StatusCode::OK, json!({"text": "hi"}))]);
+    let boundary = "gproxy-test-boundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\np1/m1\r\n\
+         --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n\
+         Content-Type: audio/wav\r\n\r\nRIFF\r\n--{boundary}--\r\n"
+    );
+    let request = Request::builder()
+        .method(http::Method::POST)
+        .uri("/v1/audio/transcriptions")
+        .header("host", support::HOST)
+        .header("authorization", "Bearer k-alice")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let answer = host.send(request).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.text());
+    assert_eq!(
+        host.client.urls(),
+        vec!["https://p1.example/v1/audio/transcriptions"]
+    );
+    let sent = String::from_utf8(host.client.raw_bodies()[0].to_vec()).unwrap();
+    assert!(sent.contains("name=\"model\"\r\n\r\nm1\r\n"), "{sent}");
+    assert!(sent.contains("filename=\"a.wav\""), "{sent}");
+}
+
+#[tokio::test]
+async fn the_catalog_parses_as_each_dialect_s_own_model_resource() {
+    let host = instance().await;
+    // Listing refreshes the catalog from upstream first; a failed refresh
+    // keeps the saved catalog, which is what is asserted here.
+    host.client.script((0..8).map(|_| Reply::Failed).collect());
+    let list = |path: &str| keyed(get(path), "k-alice");
+    let openai = host.send(list("/v1/models")).await;
+    assert_eq!(openai.status, StatusCode::OK, "{}", openai.text());
+    let openai: gproxy_protocol::openai::models::ListModelsResponseBody =
+        serde_json::from_slice(&openai.bytes).unwrap();
+    assert_eq!(openai.data[0].id, "p1/m1");
+
+    let claude = host
+        .send(with(list("/v1/models"), "anthropic-version", "2023-06-01"))
+        .await;
+    let claude: gproxy_protocol::claude::models::ListModelsResponseBody =
+        serde_json::from_slice(&claude.bytes).unwrap();
+    assert_eq!(claude.data[0].id, "p1/m1");
+
+    let gemini = host.send(list("/v1beta/models")).await;
+    let gemini: gproxy_protocol::gemini::models::ListModelsResponseBody =
+        serde_json::from_slice(&gemini.bytes).unwrap_or_else(|e| panic!("{e}"));
+    let model = &gemini.models.unwrap()[0];
+    assert_eq!(model.name, "models/p1/m1");
+    assert_eq!(model.base_model_id, "p1/m1");
+
+    let one = host.send(list("/v1beta/models/p1%2Fm1")).await;
+    assert_eq!(one.status, StatusCode::OK, "{}", one.text());
+    let one: gproxy_protocol::gemini::models::Model = serde_json::from_slice(&one.bytes).unwrap();
+    assert_eq!(one.name, "models/p1/m1");
 }

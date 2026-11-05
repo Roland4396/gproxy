@@ -14,8 +14,12 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GenerateContentRequestBody {
     pub contents: Vec<Content>,
+    /// Opaque token from a previous hop; contents must match the original request.
+    #[serde(alias = "continuation_token", skip_serializing_if = "Option::is_none")]
+    pub continuation_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,7 +55,11 @@ pub type GenerateContentResponse = WireResponse<GenerateContentResponseBody>;
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GenerateContentResponseBody {
+    /// A Google API error can arrive as a record inside a successful HTTP stream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<GenerateContentError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<Candidate>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,9 +82,25 @@ pub struct GenerateContentResponseBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
+#[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct GenerateContentError {
+    pub code: i64,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Vec<serde_json::Value>>,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PromptFeedback {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "block_reason")]
@@ -91,6 +115,7 @@ pub struct PromptFeedback {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum BlockReason {
     #[serde(rename = "BLOCK_REASON_UNSPECIFIED")]
     Unspecified,
@@ -110,6 +135,7 @@ pub enum BlockReason {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "prompt_token_count")]
@@ -152,6 +178,7 @@ pub struct UsageMetadata {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "model_stage")]
@@ -168,6 +195,7 @@ pub struct ModelStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ModelStage {
     #[serde(rename = "MODEL_STAGE_UNSPECIFIED")]
     Unspecified,
@@ -191,12 +219,15 @@ pub enum ModelStage {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Candidate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<Content>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "finish_reason")]
     pub finish_reason: Option<FinishReason>,
+    #[serde(alias = "continuation_token", skip_serializing_if = "Option::is_none")]
+    pub continuation_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "safety_ratings")]
     pub safety_ratings: Option<Vec<SafetyRating>>,
@@ -233,6 +264,7 @@ pub struct Candidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FinishReason {
     #[serde(rename = "FINISH_REASON_UNSPECIFIED")]
     Unspecified,
@@ -240,6 +272,9 @@ pub enum FinishReason {
     Stop,
     #[serde(rename = "MAX_TOKENS")]
     MaxTokens,
+    /// This hop ended, but generation requires another request with its token.
+    #[serde(rename = "CONTINUATION")]
+    Continuation,
     #[serde(rename = "SAFETY")]
     Safety,
     #[serde(rename = "RECITATION")]
@@ -284,6 +319,7 @@ pub enum FinishReason {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SafetyRating {
     pub category: HarmCategory,
     pub probability: HarmProbability,
@@ -296,6 +332,7 @@ pub struct SafetyRating {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum HarmProbability {
     #[serde(rename = "HARM_PROBABILITY_UNSPECIFIED")]
     Unspecified,
@@ -313,6 +350,7 @@ pub enum HarmProbability {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GroundingAttribution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "source_id")]
@@ -326,6 +364,7 @@ pub struct GroundingAttribution {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AttributionSourceId {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "grounding_passage")]
@@ -342,6 +381,7 @@ pub struct AttributionSourceId {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GroundingPassageId {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "passage_id")]
@@ -358,6 +398,7 @@ pub struct GroundingPassageId {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SemanticRetrieverChunk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -371,6 +412,7 @@ pub struct SemanticRetrieverChunk {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GroundingMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "grounding_chunks")]
@@ -402,6 +444,7 @@ pub struct GroundingMetadata {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SearchEntryPoint {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "rendered_content")]
@@ -416,6 +459,7 @@ pub struct SearchEntryPoint {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GroundingChunk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web: Option<Web>,
@@ -435,6 +479,7 @@ pub struct GroundingChunk {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Web {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
@@ -449,6 +494,7 @@ pub struct Web {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Image {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "source_uri")]
@@ -467,6 +513,7 @@ pub struct Image {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RetrievedContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "custom_metadata")]
@@ -493,6 +540,7 @@ pub struct RetrievedContext {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CustomMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -514,6 +562,7 @@ pub struct CustomMetadata {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct StringList {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<String>>,
@@ -524,6 +573,7 @@ pub struct StringList {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Maps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
@@ -546,6 +596,7 @@ pub struct Maps {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PlaceAnswerSources {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "review_snippets")]
@@ -559,6 +610,7 @@ pub struct PlaceAnswerSources {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReviewSnippet {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "review_id")]
@@ -576,6 +628,7 @@ pub struct ReviewSnippet {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GroundingSupport {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "grounding_chunk_indices")]
@@ -595,6 +648,7 @@ pub struct GroundingSupport {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Segment {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "part_index")]
@@ -614,6 +668,7 @@ pub struct Segment {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RetrievalMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "google_search_dynamic_retrieval_score")]
@@ -626,6 +681,7 @@ pub struct RetrievalMetadata {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LogprobsResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "top_candidates")]
@@ -643,6 +699,7 @@ pub struct LogprobsResult {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TopCandidates {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<LogprobCandidate>>,
@@ -653,6 +710,7 @@ pub struct TopCandidates {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LogprobCandidate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -671,6 +729,7 @@ pub struct LogprobCandidate {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UrlContextMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "url_metadata")]
@@ -684,6 +743,7 @@ pub struct UrlContextMetadata {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UrlMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "retrieved_url")]
@@ -697,6 +757,7 @@ pub struct UrlMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum UrlRetrievalStatus {
     #[serde(rename = "URL_RETRIEVAL_STATUS_UNSPECIFIED")]
     Unspecified,
@@ -716,6 +777,7 @@ pub enum UrlRetrievalStatus {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CitationMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "citation_sources")]
@@ -729,6 +791,7 @@ pub struct CitationMetadata {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CitationSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "start_index")]

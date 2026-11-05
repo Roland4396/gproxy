@@ -429,7 +429,7 @@ fn closed<T: DeserializeOwned + Serialize>(values: &[&str]) {
 }
 #[test]
 fn response_enums_use_exact_native_values_and_never_lossy_other() {
-    closed::<ResponseErrorCode>(&[
+    for code in [
         "server_error",
         "rate_limit_exceeded",
         "invalid_prompt",
@@ -450,7 +450,10 @@ fn response_enums_use_exact_native_values_and_never_lossy_other() {
         "empty_image_file",
         "failed_to_download_image",
         "image_file_not_found",
-    ]);
+    ] {
+        let parsed: ResponseErrorCode = serde_json::from_value(json!(code)).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), json!(code));
+    }
     closed::<ResponseStatus>(&[
         "completed",
         "failed",
@@ -597,8 +600,8 @@ fn every_output_field_has_its_documented_required_optional_and_null_contract() {
                 "name",
                 "namespace",
             ],
-            &["id", "call_id", "output", "status", "type"],
-            &["caller", "created_by", "name", "namespace"],
+            &["id", "output", "status", "type"],
+            &["call_id", "caller", "created_by", "name", "namespace"],
             &["caller"],
         ),
         (

@@ -15,11 +15,14 @@
 //!   or `https://aiplatform.googleapis.com` when the location is `global`.
 //! - Google's own models live at `/v1beta1/projects/{project}/locations/
 //!   {location}/publishers/google/models/{model}:{verb}`. The model directory
-//!   is project-free: `/v1beta1/publishers/google/models`.
+//!   is project-free: `/v1beta1/publishers/{publisher}/models`. Listing drains
+//!   Google and Anthropic pages and returns a normalized Gemini directory,
+//!   retaining `google/{id}` / `anthropic/{id}` as upstream identities.
+//!   The model publisher also selects the native request dialect.
 //! - Anthropic's models live at `/v1/projects/{project}/locations/{location}/
 //!   publishers/anthropic/models/{model}:rawPredict`, `:streamRawPredict` for
 //!   a stream, and the token counter is the literal model `count-tokens`.
-//!   Their body carries `anthropic_version: "vertex-2023-10-16"` and must not
+//!   Their body carries `anthropic_version: "2026-10-21"` and must not
 //!   carry `model`, which the URL already names.
 //! - The OpenAI-compatible Chat surface is
 //!   `/v1beta1/projects/{project}/locations/{location}/endpoints/openapi/chat/completions`.
@@ -37,6 +40,7 @@
 mod auth;
 mod config;
 mod endpoint;
+mod models;
 mod request;
 
 pub use config::VertexConfig;

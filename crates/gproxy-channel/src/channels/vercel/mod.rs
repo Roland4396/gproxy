@@ -11,7 +11,7 @@ use crate::channel::{
 use crate::channels::shared::{
     cache,
     claude_fallback::FallbackMode,
-    claude_hygiene,
+    claude_hygiene, claude_images,
     compatible::http::{insert_configured, strip_query_auth},
 };
 use gproxy_protocol::{Dialect, HttpBody, Operation, OperationKey, connection::Bytes};
@@ -64,6 +64,7 @@ impl BaseChannel for Vercel {
         ChannelDescriptor {
             id: ID,
             display_name: "Vercel AI Gateway",
+            credential_kinds: vec!["api_key"],
             login_modes: vec![LoginMode::ApiKey],
             capabilities: ChannelCapabilities {
                 quota_query: true,
@@ -144,7 +145,11 @@ impl BaseChannel for Vercel {
             ctx.provider,
             crate::channel::ChannelHeaders::native(ctx.operation.dialect),
         )?;
-        let mut headers = forwardable(&ctx.request.headers, allowlist.as_ref(), &[]);
+        let mut headers = forwardable(
+            &ctx.request.headers,
+            allowlist.as_ref(),
+            &["anthropic-version"],
+        );
         for (name, value) in &config.headers {
             insert_configured(&mut headers, name, value)?;
         }
@@ -163,7 +168,9 @@ impl BaseChannel for Vercel {
         if ctx.operation.dialect == Dialect::Claude {
             headers
                 .entry(HeaderName::from_static("anthropic-version"))
-                .or_insert(HeaderValue::from_static("2023-06-01"));
+                .or_insert(HeaderValue::from_static(
+                    gproxy_protocol::claude::API_VERSION,
+                ));
         }
         // The native path is supplied by ingress or conversion. Only explicit
         // method URLs may contain a model placeholder.
@@ -220,6 +227,8 @@ impl BaseChannel for Vercel {
                         if ctx.operation.operation == Operation::CountTokens {
                             claude_hygiene::count_tokens(&value, &mut headers);
                         } else {
+                            // The gateway may route to Bedrock or Vertex, where documents count too.
+                            claude_images::fit(&mut value, true);
                             claude_hygiene::messages(
                                 &mut value,
                                 &mut headers,

@@ -36,6 +36,7 @@
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Operation {
     // models
     ListModels,
@@ -45,11 +46,15 @@ pub enum Operation {
     // generation
     GenerateContent,
     StreamGenerateContent,
+    // Gemini server-side interaction resources.
+    RetrieveInteraction,
+    CancelInteraction,
+    DeleteInteraction,
     // moderation
     /// Standard OpenAI moderation JSON, distinct from Codex Guardian's SSE.
     CreateModeration,
-    GuardianReview,
-    GuardianClassify,
+    /// Typed predicate, choice and score answers from the OpenAI Decisions API.
+    CreateDecision,
     // context management
     CompactContent,
     SummarizeMemory,
@@ -88,6 +93,18 @@ pub enum Operation {
     /// Some vendors instead expose a download URL in a job response; their
     /// channel implementation resolves that URL as part of this operation.
     DownloadVideoContent,
+    /// Create a custom voice from a description or a consented audio sample.
+    CreateVoice,
+    /// Mint an upstream Realtime client credential.
+    CreateRealtimeClientSecret,
+    /// Explicitly end a bound Realtime call.
+    HangupRealtimeCall,
+    /// Create a GPT-Live media session; distinct from legacy `/live` SDP setup.
+    CreateLiveSession,
+    /// Explicitly end a bound GPT-Live session.
+    HangupLiveSession,
+    /// Native GPT-Live primary or sideband WebSocket.
+    ConnectLive,
     // realtime
     /// SDP handshake creating a WebRTC realtime call.
     CreateRealtimeCall,
@@ -106,8 +123,7 @@ impl Operation {
             Self::GenerateContent
             | Self::StreamGenerateContent
             | Self::CreateModeration
-            | Self::GuardianReview
-            | Self::GuardianClassify
+            | Self::CreateDecision
             | Self::CompactContent
             | Self::SummarizeMemory
             | Self::CreateEmbedding
@@ -120,11 +136,15 @@ impl Operation {
             | Self::CreateTranscription
             | Self::CreateTranslation
             | Self::CreateVideo
-            | Self::ConnectRealtime => true,
+            | Self::ConnectRealtime
+            | Self::ConnectLive => true,
             Self::ListModels
             | Self::GetModel
             | Self::CountTokens
             | Self::CreateConversation
+            | Self::RetrieveInteraction
+            | Self::CancelInteraction
+            | Self::DeleteInteraction
             | Self::CreateFile
             | Self::ListFiles
             | Self::RetrieveFile
@@ -134,7 +154,12 @@ impl Operation {
             | Self::ListVideos
             | Self::DeleteVideo
             | Self::DownloadVideoContent
-            | Self::CreateRealtimeCall => false,
+            | Self::CreateRealtimeCall
+            | Self::CreateVoice
+            | Self::CreateRealtimeClientSecret
+            | Self::HangupRealtimeCall
+            | Self::CreateLiveSession
+            | Self::HangupLiveSession => false,
         }
     }
 
@@ -178,6 +203,7 @@ impl Operation {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WireFamily {
     #[serde(rename = "openai")]
     #[strum(serialize = "openai")]
@@ -224,6 +250,7 @@ impl WireFamily {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Dialect {
     /// OpenAI's shape for the operation; Responses for content generation.
     #[serde(rename = "openai")]
@@ -233,6 +260,9 @@ pub enum Dialect {
     Claude,
     /// Gemini's shape for the operation; GenerateContent for content generation.
     Gemini,
+    /// Gemini Interactions, distinct from GenerateContent. Generation uses
+    /// GenerateContent / StreamGenerateContent with native step-based bodies.
+    GeminiInteractions,
     /// OpenAI Chat Completions, for conversation operations only.
     #[serde(rename = "openai_chat")]
     #[strum(serialize = "openai_chat")]
@@ -259,7 +289,7 @@ impl Dialect {
         match self {
             Self::OpenAi | Self::OpenAiChat | Self::OpenAiResponsesWebSocket => WireFamily::OpenAi,
             Self::Claude => WireFamily::Claude,
-            Self::Gemini => WireFamily::Gemini,
+            Self::Gemini | Self::GeminiInteractions => WireFamily::Gemini,
         }
     }
 
@@ -281,6 +311,7 @@ impl Dialect {
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OperationKey {
     pub operation: Operation,
     pub dialect: Dialect,
@@ -346,9 +377,11 @@ mod tests {
                 "count_tokens",
                 "generate_content",
                 "stream_generate_content",
+                "retrieve_interaction",
+                "cancel_interaction",
+                "delete_interaction",
                 "create_moderation",
-                "guardian_review",
-                "guardian_classify",
+                "create_decision",
                 "compact_content",
                 "summarize_memory",
                 "create_conversation",
@@ -371,6 +404,12 @@ mod tests {
                 "list_videos",
                 "delete_video",
                 "download_video_content",
+                "create_voice",
+                "create_realtime_client_secret",
+                "hangup_realtime_call",
+                "create_live_session",
+                "hangup_live_session",
+                "connect_live",
                 "create_realtime_call",
                 "connect_realtime",
             ]
@@ -387,6 +426,7 @@ mod tests {
                 "openai",
                 "claude",
                 "gemini",
+                "gemini_interactions",
                 "openai_chat",
                 "openai_responses_websocket",
             ]

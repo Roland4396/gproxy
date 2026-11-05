@@ -91,6 +91,27 @@ fn dimension(
 }
 
 impl QuotaModel for Claudecode {
+    fn allows_exhausted_request(
+        &self,
+        provider: ProviderView<'_>,
+        dimension: &str,
+        operation: gproxy_protocol::OperationKey,
+        headers: &HeaderMap,
+    ) -> bool {
+        if !super::is_messages(operation.operation) {
+            return false;
+        }
+        let Ok(config) = ClaudecodeConfig::from_view(provider) else {
+            return false;
+        };
+        match super::usage_limit::requested_mode(headers, &config) {
+            Some(super::usage_limit::Mode::Slow) => dimension == "five_hour",
+            Some(super::usage_limit::Mode::Extended) => matches!(dimension, "five_hour" | "seven_day"),
+            None => (config.low_priority && dimension == "five_hour")
+                || (config.extended_usage && matches!(dimension, "five_hour" | "seven_day")),
+        }
+    }
+
     fn allows_paid_usage(&self, credential: CredentialView<'_>, dimension: &str) -> bool {
         credential
             .metadata
@@ -106,31 +127,30 @@ impl QuotaModel for Claudecode {
     /// Every plan has the account's `five_hour` and `seven_day` windows plus
     /// per-family weekly windows; other keys the endpoint may report
     /// (`seven_day_oauth_apps`, codenamed keys, surfaces, the weekly
-    /// breakdown) are observe-only. With `low_priority` the server keeps
-    /// serving past a full five-hour window, so only that window stops
-    /// blocking.
+    /// breakdown) are observe-only. Low priority delegates the five-hour
+    /// limit to the upstream; extended grace also delegates the account's
+    /// weekly limit. Scoped model limits remain enforced in both modes.
     fn dimensions(
         &self,
         provider: ProviderView<'_>,
         credential: CredentialView<'_>,
     ) -> Vec<QuotaDimension> {
         let plan = plan(&credential);
-        let low_priority = ClaudecodeConfig::from_view(provider)
-            .is_ok_and(|config| config.low_priority);
+        let config = ClaudecodeConfig::from_view(provider).unwrap_or_default();
         let mut dimensions = vec![
             dimension(
                 "five_hour",
                 format!("{plan} 5h window"),
                 QuotaScope::All,
                 FIVE_HOURS,
-                !low_priority,
+                !config.low_priority && !config.extended_usage,
             ),
             dimension(
                 "seven_day",
                 format!("{plan} 7d window"),
                 QuotaScope::All,
                 SEVEN_DAYS,
-                true,
+                !config.extended_usage,
             ),
         ];
         for family in SCOPED_FAMILIES {
@@ -226,6 +246,41 @@ fn present(value: &Value, field: &str) -> bool {
     value.get(field).is_some_and(|value| !value.is_null())
 }
 
+/// Dollar-shaped `iguana_necktie` is Cloud session credits, whose
+/// `resets_at` is an expiry. See the live payload/UI comparison in
+/// https://github.com/router-for-me/Cli-Proxy-API-Management-Center/pull/466.
+/// Keep null-dollar/legacy shapes on the existing window path.
+fn cloud_session_credits(value: &Value) -> Option<QuotaEntry> {
+    let dollars = |field| value.get(field)?.as_number()?.to_string().parse::<Decimal>().ok();
+    let limit = dollars("limit_dollars");
+    let used = dollars("used_dollars");
+    let remaining = dollars("remaining_dollars");
+    if limit.is_none() && used.is_none() && remaining.is_none() {
+        return None;
+    }
+    let used = used.or_else(|| Some(limit?.saturating_sub(remaining?).max(Decimal::ZERO)));
+    let remaining = remaining.or_else(|| Some(limit?.saturating_sub(used?).max(Decimal::ZERO)));
+    let used_percent = percent(value.get("utilization").and_then(Value::as_f64))
+        .or_else(|| used?.checked_div(limit?)?.checked_mul(Decimal::ONE_HUNDRED));
+    Some(QuotaEntry {
+        id: "cloud_session_credits".into(),
+        source_id: "iguana_necktie".into(),
+        label: Some("Cloud session credits".into()),
+        subject: QuotaSubject::Account,
+        model_scope: QuotaScope::Unknown,
+        value: QuotaValue::Budget(QuotaAllowance {
+            used,
+            limit,
+            remaining,
+            used_percent,
+            unit: Some("USD".into()),
+            period_end_ms: value.get("resets_at").and_then(Value::as_str).and_then(iso_to_ms),
+            reset_behavior: QuotaResetBehavior::Expiring,
+            ..Default::default()
+        }),
+    })
+}
+
 /// One rolling window: `utilization` is a percentage (0–100), `resets_at`
 /// an ISO-8601 timestamp.
 #[derive(Deserialize)]
@@ -253,7 +308,9 @@ struct UsageLimit {
 #[derive(Deserialize)]
 struct LimitScope {
     model: Option<ScopeModel>,
-    surface: Option<String>,
+    // CLI 2.1.302's usage schema uses { display_name }; also accept the
+    // string form this channel previously supported.
+    surface: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -283,7 +340,11 @@ impl UsageLimit {
                 .find(|value| !value.is_empty())?;
             return Some(format!("weekly_model:{}", slug(selector)));
         }
-        let surface = scope.surface.as_deref().map(str::trim)?;
+        let surface = scope.surface.as_ref()?;
+        let surface = surface
+            .as_str()
+            .or_else(|| surface.get("display_name")?.as_str())?
+            .trim();
         (!surface.is_empty()).then(|| format!("weekly_surface:{}", slug(surface)))
     }
 }
@@ -302,6 +363,10 @@ pub(super) fn usage_entries(body: &[u8]) -> Result<Vec<QuotaEntry>, ChannelError
         serde_json::from_slice(body).map_err(|e| invalid_response(e.to_string()))?;
     let mut entries = Vec::new();
     for (key, value) in &usage.windows {
+        if key == "iguana_necktie" && let Some(credits) = cloud_session_credits(value) {
+            entries.push(credits);
+            continue;
+        }
         if key == "seven_day_breakdown" {
             let rows = value.get("rows").and_then(Value::as_array).into_iter().flatten()
                 .filter_map(|row| Some(QuotaBreakdownRow {
@@ -390,7 +455,9 @@ impl QuotaQuery for Claudecode {
             );
             headers.insert(
                 header::USER_AGENT,
-                HeaderValue::from_static(super::CLI_USER_AGENT),
+                HeaderValue::from_static(
+                    super::ClientIdentity::of(context.provider).user_agent(None),
+                ),
             );
             headers.insert(
                 "anthropic-beta",
@@ -455,6 +522,42 @@ impl QuotaHeaders for Claudecode {
                 used,
                 Some(claim.seconds),
                 reset,
+            ));
+        }
+        // These allowances are additional to the subscription windows, not
+        // replacements. Observing them must not block ordinary requests.
+        for (id, label, utilization, reset, seconds) in [
+            (
+                "slow_budget", "Low-priority allowance",
+                "anthropic-ratelimit-unified-slow-budget-utilization",
+                "anthropic-ratelimit-unified-slow-budget-reset", SEVEN_DAYS,
+            ),
+            (
+                "grace_five_hour", "5h grace",
+                "anthropic-ratelimit-unified-grace-5h-utilization",
+                "anthropic-ratelimit-unified-5h-reset", FIVE_HOURS,
+            ),
+            (
+                "grace_seven_day", "7d grace",
+                "anthropic-ratelimit-unified-grace-7d-utilization",
+                "anthropic-ratelimit-unified-7d-reset", SEVEN_DAYS,
+            ),
+        ] {
+            if id.starts_with("grace_") && (!context.status.is_success()
+                || !headers.contains_key("anthropic-ratelimit-unified-status")) {
+                continue;
+            }
+            let Some(used) = header_str(headers, utilization)
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite()) else { continue; };
+            let end = header_str(headers, reset)
+                .or_else(|| (id == "slow_budget").then(|| header_str(headers, "anthropic-ratelimit-unified-7d-reset")).flatten())
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map(|seconds| (seconds.round() as i64).saturating_mul(1000));
+            entries.push(window_entry(
+                id.into(), Some(label.into()), QuotaScope::All,
+                percent(Some(used.clamp(0.0, 1.0) * 100.0)), Some(seconds), end,
             ));
         }
         Ok(entries)

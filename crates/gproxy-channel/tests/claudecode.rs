@@ -144,14 +144,14 @@ fn messages_request(headers: HeaderMap, body: Value) -> WireRequest {
 }
 
 #[test]
-fn default_connections_separate_api_requests_and_cookie_login() {
+fn default_connections_separate_api_requests_and_browser_initialization() {
     use gproxy_channel::channel::ConnectionPurpose;
     use gproxy_client::{Backend, EmulationConfig};
     let api = Claudecode.default_connection().expect("channel default");
     assert_eq!(api.backend, Backend::Wreq);
     assert!(api.emulation.is_none());
     let cookie = Claudecode
-        .default_connection_for(ConnectionPurpose::CookieLogin)
+        .default_connection_for(ConnectionPurpose::Browser)
         .unwrap();
     assert_eq!(cookie.backend, Backend::Wreq);
     assert!(matches!(
@@ -188,7 +188,7 @@ fn prepares_messages_with_cli_identity_and_request_hygiene() {
     );
     headers.insert(
         "user-agent",
-        HeaderValue::from_static("claude-cli/2.1.293 (external, sdk-cli)"),
+        HeaderValue::from_static("claude-cli/2.1.316 (external, sdk-cli)"),
     );
     headers.insert("x-request-id", HeaderValue::from_static("req-1"));
     let body = json!({
@@ -198,7 +198,7 @@ fn prepares_messages_with_cli_identity_and_request_hygiene() {
         "top_p": 0.9,
         "top_k": 40,
         "system": [
-            {"type":"text", "text":"x-anthropic-billing-header: cc_version=2.1.293.abc; cc_entrypoint=sdk-cli;"},
+            {"type":"text", "text":"x-anthropic-billing-header: cc_version=2.1.316.abc; cc_entrypoint=sdk-cli;"},
             {"type":"text", "text":" policy "},
             {"type":"text", "text":" ", "cache_control":{"type":"ephemeral"}}
         ],
@@ -222,13 +222,13 @@ fn prepares_messages_with_cli_identity_and_request_hygiene() {
     );
     let h = request.headers();
     assert_eq!(h["authorization"], "Bearer at-1");
-    assert_eq!(h["anthropic-version"], "2023-06-01");
+    assert_eq!(h["anthropic-version"], "2026-10-21");
     assert_eq!(
         h["anthropic-beta"], "oauth-2025-04-20,feature-x,fast-mode-2026-02-01",
         "oauth beta first, client betas kept, context-1m stripped, fast mode derived"
     );
     assert_eq!(h["x-app"], "cli");
-    assert_eq!(h["user-agent"], "claude-cli/2.1.293 (external, sdk-cli)");
+    assert_eq!(h["user-agent"], "claude-cli/2.1.316 (external, sdk-cli)");
     assert_eq!(h["x-claude-code-session-id"], "session-1");
     assert_eq!(h["x-stainless-package-version"], "0.128.0");
     assert_eq!(h["anthropic-dangerous-direct-browser-access"], "true");
@@ -248,13 +248,11 @@ fn prepares_messages_with_cli_identity_and_request_hygiene() {
     assert_eq!(shaped["system"][1]["cache_control"]["type"], "ephemeral");
     let billing = normalize_cch(shaped["system"][0]["text"].as_str().unwrap());
     let billing = billing.as_str();
-    let (fixed, prompt) = billing.split_once(" cc_prompt_id=").unwrap();
     assert_eq!(
-        fixed,
-        "x-anthropic-billing-header: cc_version=2.1.293.1d1; cc_entrypoint=sdk-cli; cch=00000;"
+        billing,
+        "x-anthropic-billing-header: cc_version=2.1.316.db3; cc_entrypoint=sdk-cli; cch=00000;",
+        "a client block without turn fragments is a side call and stays bare"
     );
-    assert_eq!(prompt.len(), 37, "a derived prompt UUID: {prompt}");
-    assert!(prompt.ends_with(';'));
     let ids: Value = serde_json::from_str(shaped["metadata"]["user_id"].as_str().unwrap()).unwrap();
     assert_eq!(ids["device_id"], "device-meta", "metadata over secret");
     assert_eq!(ids["account_uuid"], "account-meta");
@@ -378,33 +376,64 @@ fn billing_block_keeps_valid_client_fragments_in_cli_order() {
     };
 
     // Every fragment present, out of order, with one that fails the CLI's
-    // regex and one the CLI never emits.
+    // regex, one the CLI never emits, and gateway attribution that a direct
+    // OAuth client does not send.
     assert_eq!(
         billing(concat!(
             "x-anthropic-billing-header: cc_prompt_id=0B1C2D3E-4F50-4A6B-8C7D-8E9F0A1B2C3D; ",
             "cc_version=2.1.200.zzz; cc_prev_req=req_0123abc-XYZ_; cc_is_subagent=true; ",
-            "cc_workload=agent_run; cc_entrypoint=sdk-ts; cc_secret=leak; cch=11111; cc_turn_origin=user;"
+            "cc_prev_turn_index=12; cc_prev_msg=msg_0123abc_XYZ; cc_prev_prompt_index=0; ",
+            "cc_workload=agent_run; cc_entrypoint=sdk-ts; cc_secret=leak; cch=11111; cc_turn_origin=user; cc_gateway=1;"
         )),
         concat!(
-            "x-anthropic-billing-header: cc_version=2.1.293.1d1; cc_entrypoint=sdk-ts; cch=00000; ",
+            "x-anthropic-billing-header: cc_version=2.1.316.db3; cc_entrypoint=sdk-ts; cch=00000; ",
             "cc_workload=agent_run; cc_is_subagent=true; cc_prev_req=req_0123abc-XYZ_; ",
-            "cc_prompt_id=0B1C2D3E-4F50-4A6B-8C7D-8E9F0A1B2C3D; cc_turn_origin=user;"
+            "cc_prompt_id=0B1C2D3E-4F50-4A6B-8C7D-8E9F0A1B2C3D; cc_turn_origin=user; ",
+            "cc_prev_msg=msg_0123abc_XYZ; cc_prev_prompt_index=0; cc_prev_turn_index=12;"
         )
     );
     // Invalid values are dropped rather than forwarded: a prev_req without
     // the CLI shape, a subagent flag that is not `true`, a workload with a
-    // space, an entrypoint with a slash, and a prompt id that is not a UUID
-    // (which is then derived instead).
+    // space, an entrypoint with a slash, and a prompt id that is not a UUID.
+    // Gateway attribution is also dropped. With no valid turn fragment left
+    // the block is a side call, so nothing is synthesized.
     let derived = billing(concat!(
         "x-anthropic-billing-header: cc_version=2.1.200.zzz; cc_entrypoint=sdk/ts; ",
-        "cc_workload=agent run; cc_is_subagent=false; cc_prev_req=nope; cc_prompt_id=prompt-1;"
+        "cc_workload=agent run; cc_is_subagent=false; cc_prev_req=nope; cc_prompt_id=prompt-1; cc_gateway=env;",
+        "cc_prev_msg=msg_bad-id; cc_prev_prompt_index=0; cc_prev_turn_index=0;"
     ));
-    let (fixed, prompt) = derived.split_once(" cc_prompt_id=").unwrap();
     assert_eq!(
-        fixed,
-        "x-anthropic-billing-header: cc_version=2.1.293.1d1; cc_entrypoint=cli; cch=00000;"
+        derived,
+        "x-anthropic-billing-header: cc_version=2.1.316.db3; cc_entrypoint=cli; cch=00000;"
     );
-    assert_eq!(prompt.len(), 37);
+    for invalid in [
+        "msg_",
+        "msg_bad-id",
+        "MSG_a",
+        "msg_用户",
+        &format!("msg_{}", "a".repeat(65)),
+    ] {
+        assert!(
+            !billing(&format!(
+                "x-anthropic-billing-header: cc_prev_msg={invalid};"
+            ))
+            .contains("cc_prev_msg=")
+        );
+    }
+    for (prompt, turn, valid) in [
+        ("0", "1", true),
+        ("10000000", "10000000", true),
+        ("2", "1", true),
+        ("10000001", "1", false),
+        ("-1", "1", false),
+        ("1", "", false),
+    ] {
+        let shaped = billing(&format!(
+            "x-anthropic-billing-header: cc_prev_prompt_index={prompt}; cc_prev_turn_index={turn};"
+        ));
+        assert_eq!(shaped.contains("cc_prev_prompt_index="), valid);
+        assert_eq!(shaped.contains("cc_prev_turn_index="), valid);
+    }
     for invalid in [
         "User",
         "_user",
@@ -425,7 +454,7 @@ fn billing_block_keeps_valid_client_fragments_in_cli_order() {
         ));
         assert!(shaped.ends_with(&format!(" cc_turn_origin={valid};")));
     }
-    // The same device, session and prompt derive the same id.
+    // Invalid fragments leave the same bare side-call block as none at all.
     assert_eq!(
         billing("x-anthropic-billing-header: cc_version=2.1.200.zzz; cc_entrypoint=cli;"),
         derived
@@ -761,7 +790,7 @@ async fn authorize_url_and_code_exchange_follow_the_cli() {
 }
 
 #[tokio::test]
-async fn cookie_login_bootstraps_authorizes_and_exchanges() {
+async fn cookie_import_bootstraps_authorizes_and_exchanges() {
     let config = json!({});
     let client = ScriptClient::new(vec![
         raw_reply(StatusCode::FORBIDDEN, "<title>Just a moment...</title>"),
@@ -783,18 +812,18 @@ async fn cookie_login_bootstraps_authorizes_and_exchanges() {
                    "organization": {"uuid": "org-sub", "organization_type": "claude_max"}}),
         ),
     ]);
+    let imported = json!({"cookie": "Cookie: cf_clearance=clear; sessionKey=sk-ant-sid01-example"});
     let acquired = Claudecode
-        .cookie_login()
+        .credential_refresh()
         .unwrap()
-        .exchange_cookie(
-            LoginContext {
-                provider: provider(&config, None),
-                client: &client,
-            },
-            "Cookie: cf_clearance=clear; sessionKey=sk-ant-sid01-example",
-        )
+        .refresh(CredentialContext {
+            provider: provider(&config, None),
+            credential: credential(&imported, &Value::Null),
+            client: &client,
+        })
         .await
         .unwrap();
+    let metadata = acquired.metadata.as_ref().unwrap();
     assert_eq!(acquired.secret["access_token"], "fresh");
     assert!(acquired.secret.get("refresh_token").unwrap().is_null());
     assert_eq!(
@@ -802,13 +831,10 @@ async fn cookie_login_bootstraps_authorizes_and_exchanges() {
         "cf_clearance=clear; sessionKey=sk-ant-sid01-example"
     );
     assert!(acquired.expires_at_ms.unwrap() > now_ms());
-    assert_eq!(acquired.metadata["account_uuid"], "account-1");
-    assert_eq!(acquired.metadata["organization_uuid"], "org-sub");
-    assert_eq!(acquired.metadata["user_email"], "user@example.com");
-    assert!(
-        acquired.metadata.get("cookie").is_none(),
-        "the cookie is secret"
-    );
+    assert_eq!(metadata["account_uuid"], "account-1");
+    assert_eq!(metadata["organization_uuid"], "org-sub");
+    assert_eq!(metadata["user_email"], "user@example.com");
+    assert!(metadata.get("cookie").is_none(), "the cookie is secret");
     let sent = client.sent();
     assert_eq!(sent.len(), 5);
     assert_eq!(sent[0].1, "https://claude.ai/api/bootstrap");
@@ -885,17 +911,7 @@ async fn cookie_login_bootstraps_authorizes_and_exchanges() {
     assert_eq!(client.sent().len(), 4);
 
     assert!(matches!(
-        Claudecode
-            .cookie_login()
-            .unwrap()
-            .exchange_cookie(
-                LoginContext {
-                    provider: provider(&config, None),
-                    client: &client,
-                },
-                "not a cookie",
-            )
-            .await,
+        Claudecode.validate_credential_secret(&json!({"cookie": "not a cookie"})),
         Err(ChannelError::InvalidCredential)
     ));
 }
@@ -991,10 +1007,10 @@ async fn refresh_rotates_tokens_and_classifies_rejections() {
         matches!(error, ChannelError::UpstreamResponse { status, .. } if status == StatusCode::BAD_GATEWAY),
         "a 5xx is transient"
     );
-    let error = refresher.refresh(context()).await.err().expect("rejected");
+    let error = refresher.refresh(context()).await.err().expect("transient");
     assert!(
-        matches!(&error, ChannelError::RefreshRejected(code) if code == "authentication_error"),
-        "401 is final: {error}"
+        matches!(error, ChannelError::UpstreamResponse { status, .. } if status == StatusCode::UNAUTHORIZED),
+        "a 401 without invalid_grant is transient"
     );
     let error = refresher.refresh(context()).await.err().expect("transient");
     assert!(
@@ -1058,7 +1074,7 @@ fn quota_model_declares_account_and_family_windows() {
 }
 
 #[test]
-fn low_priority_marks_messages_and_frees_only_the_five_hour_window() {
+fn low_priority_waits_for_an_offer_and_frees_only_the_five_hour_window() {
     let secret = secret("at-1");
     let marked = |config: &Value, operation: Operation, path: &str| {
         Claudecode
@@ -1085,7 +1101,8 @@ fn low_priority_marks_messages_and_frees_only_the_five_hour_window() {
     for operation in [Operation::GenerateContent, Operation::StreamGenerateContent] {
         assert_eq!(
             marked(&on, operation, "/v1/messages").as_deref(),
-            Some("slow")
+            None,
+            "an enabled offer policy does not mark an unoffered request"
         );
         assert_eq!(marked(&off, operation, "/v1/messages"), None);
     }
@@ -1114,6 +1131,14 @@ fn low_priority_marks_messages_and_frees_only_the_five_hour_window() {
         ],
         "the server refuses low priority past the weekly limit"
     );
+    assert_eq!(
+        blocking(&json!({"extended_usage": true})),
+        vec![
+            ("five_hour".into(), false),
+            ("seven_day".into(), false),
+            ("seven_day_fable".into(), true),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1133,7 +1158,11 @@ async fn oauth_usage_is_queried_with_the_cli_identity_and_parsed() {
                 { "kind": "weekly_scoped", "percent": 12.0, "resets_at": "2026-09-03T00:00:00Z",
                   "scope": { "model": { "id": "claude-opus-5", "display_name": "Claude Opus 5" } } },
                 { "kind": "weekly_scoped", "percent": 3.0, "resets_at": "2026-09-03T00:00:00Z",
-                  "scope": { "model": { "display_name": "Claude Sonnet" } } }
+                  "scope": { "model": { "display_name": "Claude Sonnet" } } },
+                { "kind": "weekly_scoped", "percent": 18.0, "resets_at": "2026-09-03T00:00:00Z",
+                  "scope": { "surface": { "display_name": "Claude Code" } } },
+                { "kind": "weekly_scoped", "percent": 9.0, "resets_at": "2026-09-03T00:00:00Z",
+                  "scope": { "surface": "Cowork" } }
             ]
         }),
     )]);
@@ -1168,6 +1197,8 @@ async fn oauth_usage_is_queried_with_the_cli_identity_and_parsed() {
             "seven_day_opus",
             "weekly_model:claude_opus_5",
             "seven_day_sonnet",
+            "weekly_surface:claude_code",
+            "weekly_surface:cowork",
         ],
         "explicit nulls are not windows; weekly_all duplicates seven_day; \
          a family limit takes the family window id"
@@ -1202,6 +1233,12 @@ async fn oauth_usage_is_queried_with_the_cli_identity_and_parsed() {
         snapshot.entries[5].model_scope,
         QuotaScope::ModelPrefixes(vec!["claude-sonnet".into()])
     );
+    for (index, used) in [(6, 18), (7, 9)] {
+        let QuotaValue::Window(window) = &snapshot.entries[index].value else {
+            panic!("surface window");
+        };
+        assert_eq!(window.used_percent, Some(used.into()));
+    }
 }
 
 #[test]
@@ -1386,11 +1423,24 @@ fn messages_settle_from_sse_and_from_json() {
     assert_eq!(usage.tokens.output_tokens, Some(12));
     assert_eq!(usage.tokens.cached_input_tokens, Some(10));
     assert_eq!(
-        usage.tokens.cache_creation_5m_tokens,
+        usage
+            .tokens
+            .cache_creation
+            .iter()
+            .find(|entry| entry.ttl_seconds == Some(300))
+            .map(|entry| entry.tokens),
         Some(0),
         "message_start's breakdown wins over the flat delta count"
     );
-    assert_eq!(usage.tokens.cache_creation_1h_tokens, Some(20));
+    assert_eq!(
+        usage
+            .tokens
+            .cache_creation
+            .iter()
+            .find(|entry| entry.ttl_seconds == Some(3600))
+            .map(|entry| entry.tokens),
+        Some(20)
+    );
     assert_eq!(usage.tokens.reasoning_tokens, Some(4));
     assert_eq!(usage.attempts.len(), 2);
     assert_eq!(usage.attempts[0].model, "claude-fable-5");
@@ -1425,8 +1475,24 @@ fn messages_settle_from_sse_and_from_json() {
     assert_eq!(extracted.tokens.input_tokens, Some(10));
     assert_eq!(extracted.tokens.output_tokens, Some(4));
     assert_eq!(extracted.tokens.cached_input_tokens, Some(30));
-    assert_eq!(extracted.tokens.cache_creation_5m_tokens, Some(2));
-    assert_eq!(extracted.tokens.cache_creation_1h_tokens, Some(3));
+    assert_eq!(
+        extracted
+            .tokens
+            .cache_creation
+            .iter()
+            .find(|entry| entry.ttl_seconds == Some(300))
+            .map(|entry| entry.tokens),
+        Some(2)
+    );
+    assert_eq!(
+        extracted
+            .tokens
+            .cache_creation
+            .iter()
+            .find(|entry| entry.ttl_seconds == Some(3600))
+            .map(|entry| entry.tokens),
+        Some(3)
+    );
     assert_eq!(extracted.tokens.reasoning_tokens, Some(1));
     assert_eq!(extracted.metrics["web_searches"], 2.into());
     assert_eq!(extracted.metrics["web_fetches"], 1.into());
@@ -1457,7 +1523,7 @@ fn service_request(method: Method, path: &str, query: Option<&str>, body: &str) 
     headers.insert("x-organization-uuid", HeaderValue::from_static("org-1"));
     headers.insert(
         "user-agent",
-        HeaderValue::from_static("claude-cli/2.1.293 (external, sdk-cli)"),
+        HeaderValue::from_static("claude-cli/2.1.316 (external, sdk-cli)"),
     );
     WireRequest {
         method,
@@ -1504,7 +1570,7 @@ async fn body_json(response: WireResponse) -> Value {
 
 #[tokio::test]
 async fn catalog_routes_forward_under_every_view_with_the_cli_identity() {
-    let config = json!({});
+    let config = json!({"headers":{"anthropic-usage-limit":"slow"}});
     let s = secret("at");
     let client = ScriptClient::new(vec![
         reply(StatusCode::OK, json!({})),
@@ -1537,10 +1603,14 @@ async fn catalog_routes_forward_under_every_view_with_the_cli_identity() {
     assert_eq!(sent.len(), 3);
     assert_eq!(sent[0].1, "https://api.anthropic.com/api/hello?x=1");
     let h = &sent[0].2;
+    assert!(
+        !h.contains_key("anthropic-usage-limit"),
+        "usage modes only belong on Messages"
+    );
     assert_eq!(h["authorization"], "Bearer at");
     assert_eq!(h["anthropic-beta"], "oauth-2025-04-20");
-    assert_eq!(h["anthropic-version"], "2023-06-01");
-    assert_eq!(h["user-agent"], "claude-cli/2.1.293 (external, sdk-cli)");
+    assert_eq!(h["anthropic-version"], "2026-10-21");
+    assert_eq!(h["user-agent"], "claude-cli/2.1.316 (external, sdk-cli)");
     assert_eq!(h["x-app"], "cli");
     assert_eq!(h["cache-control"], "no-cache");
     assert_eq!(h["x-organization-uuid"], "org-1");
@@ -2123,6 +2193,7 @@ async fn reset_revalidates_the_selected_program_and_never_switches_grants() {
         ("cedar_ember", Some("different-grant")),
     ] {
         let mut replies = reset_eligibility();
+        replies.remove(usize::from(program == "juniper_tide"));
         let allowed = grant_id != Some("different-grant");
         if allowed {
             replies.push(reply(
@@ -2155,18 +2226,29 @@ async fn reset_revalidates_the_selected_program_and_never_switches_grants() {
             .await
             .unwrap();
         let sent = client.sent();
+        let query = if program == "juniper_tide" {
+            "at_wall=1&skip_spend=1"
+        } else {
+            "cedar_ember=1&skip_spend=1"
+        };
+        assert_eq!(
+            sent[0].1,
+            format!("https://claude.example/api/oauth/usage?{query}"),
+            "revalidation must not depend on the unrelated reset program"
+        );
+        assert_eq!(sent.len(), if allowed { 3 } else { 1 });
         if !allowed {
             assert_eq!(result.outcome, QuotaResetOutcome::Ineligible);
             assert!(sent.iter().all(|request| request.0 == Method::GET));
         } else {
             assert_eq!(result.outcome, QuotaResetOutcome::Reset);
             assert_eq!(result.windows_reset, Some(1));
-            assert_eq!(sent[3].0, Method::POST);
+            assert_eq!(sent[2].0, Method::POST);
             assert_eq!(
-                sent[3].1,
+                sent[2].1,
                 "https://claude.example/api/organizations/org-123/reset_rate_limits"
             );
-            let body: Value = serde_json::from_slice(&sent[3].3).unwrap();
+            let body: Value = serde_json::from_slice(&sent[2].3).unwrap();
             let expected = if program == "cedar_ember" {
                 json!({"program": program, "grant_id": "gift-1", "request_id": "same-request-123"})
             } else {
@@ -2183,20 +2265,16 @@ async fn reset_does_not_consume_paused_expired_or_not_yet_usable_grants() {
     for patch in [
         json!({"paused": true}),
         json!({"ends_at": "2000-01-01T00:00:00Z"}),
-        json!({"use_requires_limit": true}),
-        json!({"blocking": ["seven_day_opus"]}),
+        json!({"usable_now": false}),
     ] {
         let mut grant = json!({"id": "gift-1", "resets_left": 2, "usable_now": true, "use_requires_limit": false, "clears": ["five_hour"]});
         for (key, value) in patch.as_object().unwrap() {
             grant[key] = value.clone();
         }
-        let client = ScriptClient::new(vec![
-            reply(StatusCode::OK, json!({})),
-            reply(
-                StatusCode::OK,
-                json!({"cedar_ember": {"eligible": true, "next_grant_id": "gift-1", "at_limit": false, "grants": [grant]}}),
-            ),
-        ]);
+        let client = ScriptClient::new(vec![reply(
+            StatusCode::OK,
+            json!({"cedar_ember": {"eligible": true, "next_grant_id": "gift-1", "at_limit": false, "grants": [grant]}}),
+        )]);
         let config = json!({});
         let s = secret("at");
         let result = Claudecode
@@ -2217,7 +2295,7 @@ async fn reset_does_not_consume_paused_expired_or_not_yet_usable_grants() {
             .await
             .unwrap();
         assert_eq!(result.outcome, QuotaResetOutcome::Ineligible);
-        assert_eq!(client.sent().len(), 2);
+        assert_eq!(client.sent().len(), 1);
         assert!(client.sent().iter().all(|request| request.0 == Method::GET));
     }
 }
@@ -2372,5 +2450,97 @@ fn configured_fallbacks_shape_messages_and_preserve_credit_replays() {
                 assert_eq!(shaped, original);
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn mcp_discovery_preserves_account_data_only_in_credential_view() {
+    let config = json!({});
+    let s = secret("at");
+    let data = json!({"data": [{"id": "mcp_1", "name": "Private connector", "extra": {"kept": true}}], "has_more": false});
+    let client = ScriptClient::new(vec![reply(StatusCode::OK, data.clone())]);
+    let accounts = [account(&config, &s, &client)];
+    let member = ScriptCaller::member("m");
+    let services = Claudecode.services().unwrap();
+    assert!(services.route(&Method::GET, "/v1/mcp_servers").is_some());
+    assert!(services.route(&Method::POST, "/v1/mcp_servers").is_none());
+    assert!(services.route(&Method::GET, "/v1/messages").is_none());
+    for view in [ServiceView::Caller, ServiceView::Pool] {
+        let response = services
+            .call(context(
+                &accounts,
+                &member,
+                view,
+                service_request(Method::GET, "/v1/mcp_servers", None, ""),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status, StatusCode::FORBIDDEN);
+    }
+    assert!(client.sent().is_empty());
+    let admin = ScriptCaller::admin("a");
+    let response = services
+        .call(context(
+            &accounts,
+            &admin,
+            ServiceView::Credential("c".into()),
+            service_request(
+                Method::GET,
+                "/v1/mcp_servers",
+                Some("limit=1000&include_additional_installs=true"),
+                "",
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await, data);
+    let sent = client.sent();
+    assert_eq!(
+        sent[0].1,
+        "https://api.anthropic.com/v1/mcp_servers?limit=1000&include_additional_installs=true"
+    );
+    assert_eq!(sent[0].2["authorization"], "Bearer at");
+    assert_eq!(
+        sent[0].2["anthropic-beta"],
+        "oauth-2025-04-20,mcp-servers-2025-12-04"
+    );
+}
+
+#[tokio::test]
+async fn public_mcp_directories_forward_without_account_credentials() {
+    let config = json!({"headers": {"authorization": "Bearer static-secret", "x-api-key": "static-key", "cookie": "sessionKey=static-cookie"}});
+    let s = secret("at");
+    let data = json!({"servers": [{"name": "public"}], "metadata": {"nextCursor": "next"}});
+    let client = ScriptClient::new(vec![
+        reply(StatusCode::OK, data.clone()),
+        reply(StatusCode::OK, data.clone()),
+    ]);
+    let accounts = [account(&config, &s, &client)];
+    let member = ScriptCaller::member("m");
+    let services = Claudecode.services().unwrap();
+    for path in ["/mcp-registry/v0/servers", "/api/directory/servers"] {
+        assert!(services.route(&Method::GET, path).is_some());
+        let response = services
+            .call(context(
+                &accounts,
+                &member,
+                ServiceView::Caller,
+                service_request(
+                    Method::GET,
+                    path,
+                    Some("version=latest&cursor=page2&visibility=commercial"),
+                    "",
+                ),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(body_json(response).await, data);
+    }
+    for (_, uri, headers, _) in client.sent() {
+        assert!(uri.ends_with("?version=latest&cursor=page2&visibility=commercial"));
+        assert!(headers.get("authorization").is_none());
+        assert!(headers.get("x-api-key").is_none());
+        assert!(headers.get("cookie").is_none());
+        assert!(headers.get("x-organization-uuid").is_none());
     }
 }

@@ -39,8 +39,8 @@ use gproxy_store::entity::upstream::provider;
 use crate::{
     SdkError, SdkResult,
     dto::{
-        AuthCodeComplete, AuthCodeStart, AuthCodeStarted, CookieExchange, CredentialCreated,
-        CredentialOwner, DevicePollOutcome, DeviceStart, DeviceStarted,
+        AuthCodeComplete, AuthCodeStart, AuthCodeStarted, CredentialCreated, CredentialOwner,
+        DevicePollOutcome, DeviceStart, DeviceStarted,
     },
     handle::Inner,
     manage::{Manage, Writer},
@@ -86,7 +86,7 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Login<'_, C> {
                 "this channel has no authorization code login",
             ));
         };
-        let pkce = pkce::pkce()?;
+        let pkce = pkce::pkce(flow.pkce_verifier_bytes())?;
         let state = crate::ids::random_id();
         let client = self.inner.core.provider_client(&provider.entity.id).await?;
         // An empty redirect leaves the choice to the channel, which is what a
@@ -317,44 +317,6 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Login<'_, C> {
                 Ok(DevicePollOutcome::Expired)
             }
         }
-    }
-
-    /// Exchange a browser session cookie for a credential. One call: there is
-    /// no pending state, so there is no session and nothing to expire.
-    pub async fn cookie_exchange(&self, request: CookieExchange) -> SdkResult<CredentialCreated> {
-        let provider = self.provider(&request.provider_id)?;
-        let Some(flow) = provider.channel.cookie_login() else {
-            return Err(SdkError::Unsupported("this channel has no cookie login"));
-        };
-        let cookie = request.cookie.trim();
-        if cookie.is_empty() {
-            return Err(SdkError::invalid("cookie must not be blank"));
-        }
-        let client = self
-            .inner
-            .core
-            .provider_client_for(
-                &provider.entity.id,
-                gproxy_channel::channel::ConnectionPurpose::CookieLogin,
-            )
-            .await?;
-        let acquired = flow
-            .exchange_cookie(
-                LoginContext {
-                    provider: provider.view(),
-                    client: client.as_ref(),
-                },
-                cookie,
-            )
-            .await?;
-        self.created(
-            &provider,
-            persist::COOKIE,
-            request.label,
-            request.owner,
-            acquired,
-        )
-        .await
     }
 
     async fn created(

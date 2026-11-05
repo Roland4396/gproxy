@@ -11,10 +11,14 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum StreamEvent {
     /// Undocumented upstream heartbeat; converted to Claude ping or otherwise ignored.
     #[serde(rename = "keepalive")]
     Keepalive,
+    /// Out-of-band response metadata emitted by the Codex Responses backend.
+    #[serde(rename = "response.metadata")]
+    Metadata(ResponseMetadata),
     #[serde(rename = "response.created")]
     Created(ResponseCreated),
     #[serde(rename = "response.queued")]
@@ -120,11 +124,50 @@ pub enum StreamEvent {
     #[serde(rename = "response.mcp_list_tools.failed")]
     McpListToolsFailed(McpListToolsEvent),
     #[serde(rename = "error")]
-    Error(ResponseErrorEvent),
+    Error(ResponseStreamError),
+    /// A future event type is ignored by converters. Known event payloads remain strict.
+    /// Native passthrough retains the original bytes rather than this marker.
+    #[serde(other, rename = "unknown")]
+    Unknown,
 }
+/// Codex turn headers and opaque moderation/verification or buffering metadata.
+/// These are stream notifications, distinct from user-supplied Response.metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
+#[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ResponseMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_number: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "present_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub metadata: Option<serde_json::Value>,
+    #[serde(
+        default,
+        deserialize_with = "present_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub headers: Option<serde_json::Value>,
+    #[serde(
+        default,
+        deserialize_with = "present_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub safety_buffering: Option<serde_json::Value>,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
+}
+
 macro_rules! event_struct { ($name:ident { $($field:ident : $ty:ty),* $(,)? }) => { #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)] #[serde(rename_all="snake_case")] #[cfg_attr(not(feature="exhaustive"), non_exhaustive)] #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct $name { pub sequence_number: i64, $(pub $field: $ty,)* #[serde(default, flatten, skip_serializing_if="serde_json::Map::is_empty")] pub rest: Rest } }; }
 macro_rules! agent_event_struct { ($name:ident { $($field:ident : $ty:ty),* $(,)? }) => { #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)] #[serde(rename_all="snake_case")] #[cfg_attr(not(feature="exhaustive"), non_exhaustive)] #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct $name { #[serde(default, deserialize_with = "super::input::present_nullable", skip_serializing_if = "Option::is_none")] pub agent: Option<Option<super::multi_agent::Agent>>, pub sequence_number: i64, $(pub $field: $ty,)* #[serde(default, flatten, skip_serializing_if="serde_json::Map::is_empty")] pub rest: Rest } }; }
 event_struct!(ResponseCreated {
     response: GenerateContentResponseBody
@@ -197,6 +240,7 @@ agent_event_struct!(ReasoningSummaryPartAddedEvent {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReasoningSummaryPartDoneEvent {
     #[serde(
         default,
@@ -221,6 +265,7 @@ pub struct ReasoningSummaryPartDoneEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SummaryPartStatus {
     #[serde(rename = "incomplete")]
     Incomplete,
@@ -315,6 +360,7 @@ pub type ResponseStream = crate::WireResponse<crate::connection::ByteStream>;
 #[serde(untagged)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OutputContentPart {
     Text(super::input::ResponseOutputText),
     Refusal(super::input::ResponseOutputRefusal),
@@ -325,6 +371,7 @@ pub enum OutputContentPart {
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReasoningText {
     pub text: String,
     #[serde(rename = "type")]
@@ -335,6 +382,7 @@ pub struct ReasoningText {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReasoningTextType {
     #[serde(rename = "reasoning_text")]
     ReasoningText,
@@ -345,6 +393,7 @@ pub enum ReasoningTextType {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct StreamLogprob {
     pub token: String,
     pub logprob: serde_json::Number,
@@ -363,6 +412,7 @@ pub struct StreamLogprob {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct StreamTopLogprob {
     #[serde(
         default,
@@ -385,6 +435,7 @@ pub struct StreamTopLogprob {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReasoningSummaryPart {
     pub text: String,
     #[serde(rename = "type")]
@@ -395,9 +446,61 @@ pub struct ReasoningSummaryPart {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReasoningSummaryPartType {
     #[serde(rename = "summary_text")]
     SummaryText,
+}
+
+/// HTTP Responses uses flat errors; the Codex backend also emits nested errors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, gproxy_protocol_macros::DeclaredFields)]
+#[serde(untagged)]
+#[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum ResponseStreamError {
+    Flat(ResponseErrorEvent),
+    Nested(ResponseNestedErrorEvent),
+}
+
+impl<'de> Deserialize<'de> for ResponseStreamError {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        // A malformed nested error must not fall back to flat fields and lose
+        // the upstream failure as an unknown extension.
+        if value.get("error").is_some() {
+            serde_json::from_value(value).map(Self::Nested)
+        } else {
+            serde_json::from_value(value).map(Self::Flat)
+        }
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+impl From<ResponseErrorEvent> for ResponseStreamError {
+    fn from(event: ResponseErrorEvent) -> Self {
+        Self::Flat(event)
+    }
+}
+
+impl ResponseStreamError {
+    pub fn sequence_number(&self) -> i64 {
+        match self {
+            Self::Flat(event) => event.sequence_number,
+            Self::Nested(event) => event.sequence_number,
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
+)]
+#[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ResponseNestedErrorEvent {
+    pub sequence_number: i64,
+    pub error: super::websocket::ErrorDetail,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
 }
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder,
@@ -405,12 +508,15 @@ pub enum ReasoningSummaryPartType {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseErrorEvent {
     #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))]
     #[serde(deserialize_with = "super::input::required_nullable")]
     pub code: Option<String>,
     pub message: String,
     #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))]
     #[serde(deserialize_with = "super::input::required_nullable")]
     pub param: Option<String>,
     pub sequence_number: i64,

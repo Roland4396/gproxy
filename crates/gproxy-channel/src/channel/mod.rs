@@ -12,6 +12,7 @@ mod quota;
 pub(crate) mod reason;
 mod refresh;
 mod registry;
+mod rejection;
 mod service;
 mod state;
 mod usage;
@@ -21,13 +22,18 @@ pub use descriptor::{
     ChannelCapabilities, ChannelDescriptor, ConfigKey, ConfigKeyKind, HOST_CONFIG_KEYS, LoginMode,
 };
 pub use fallback::{CLAUDE_FALLBACK_KEYS, ClaudeFallback, claude_fallback_model};
-pub use headers::{ChannelHeaders, HeaderAllowlist, forwardable};
+pub use headers::{
+    ChannelHeaders, HeaderAllowlist, forwardable, insert_configured, strip_query_auth,
+};
 pub use oauth::{
-    AcquiredCredential, AuthorizationCode, AuthorizationRequest, AuthorizationStart, CookieLogin,
+    AcquiredCredential, AuthorizationCode, AuthorizationRequest, AuthorizationStart,
     DeviceAuthorization, DevicePoll, LoginContext, OAuthAuthorizationCode, OAuthCredential,
     OAuthDeviceCode,
 };
 pub use operations::{OperationContext, OperationFuture};
+// Unused when no channel feature is enabled.
+#[allow(unused_imports)]
+pub(crate) use operations::{UNBOUNDED, read_body};
 pub use quota::{
     QuotaAllowance, QuotaBalance, QuotaBreakdownRow, QuotaDimension, QuotaEntry,
     QuotaHeaderContext, QuotaHeaders, QuotaMetric, QuotaModel, QuotaQuery, QuotaReset,
@@ -43,13 +49,18 @@ pub use service::{
 };
 pub use state::{ChannelState, NoState};
 pub use usage::{
-    NormalizedUsage, ResponseUsage, TokenUsage, UsageAttempt, UsageCompleteness, UsageExtras,
-    UsageSource, UsageStreamEnd, UsageTransport, usage_object, with_extras,
+    CacheCreation, NormalizedUsage, ResponseUsage, TokenUsage, UsageAttempt, UsageCompleteness,
+    UsageExtras, UsageSource, UsageStreamEnd, UsageTransport, usage_object, with_extras,
 };
 
 pub use reason::{ResponseReason, ResponseReasonObserver, standard_reason_observer};
 
-pub use refresh::{CredentialRefresh, CredentialUpdate, RefreshContext};
+pub use rejection::{
+    Rejection, RejectionContext, RejectionKind, error_object, go_duration, proto_duration,
+    retry_after, standard_rejection,
+};
+
+pub use refresh::{CredentialRefresh, CredentialUpdate, RefreshContext, RefreshReason};
 
 use gproxy_client::{ConnectionConfig, OutboundClient};
 use gproxy_protocol::{
@@ -79,7 +90,8 @@ pub enum ChannelError {
     InvalidCredential,
     /// The upstream definitively refused to refresh this credential
     /// (invalid_grant, revoked or expired refresh token). Retrying later does
-    /// not help; the host marks the credential dead until a person logs in again.
+    /// not help; the host remembers the failure according to the channel's
+    /// rejection policy until the credential changes.
     /// Transient transport or 5xx failures must not use this variant.
     #[error("credential refresh rejected: {0}")]
     RefreshRejected(String),
@@ -141,11 +153,11 @@ pub struct PrepareContext<'a, B = HttpBody> {
     pub endpoint_override: Option<&'a str>,
 }
 
-/// Transport defaults vary between API calls and browser cookie login.
+/// Transport defaults vary between API calls and browser session exchanges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionPurpose {
     Request,
-    CookieLogin,
+    Browser,
 }
 
 /// Channel identity plus independently overridable operation methods.
@@ -171,23 +183,50 @@ pub trait BaseChannel: Send + Sync {
         if self.oauth_device_code().is_some() {
             login_modes.push(LoginMode::DeviceCode);
         }
-        if self.cookie_login().is_some() {
-            login_modes.push(LoginMode::Cookie);
-        }
+
         ChannelDescriptor {
             id: self.id(),
             display_name: self.id(),
+            credential_kinds: {
+                let mut kinds = Vec::new();
+                for mode in &login_modes {
+                    let kind = match mode {
+                        LoginMode::ApiKey => "api_key",
+                        LoginMode::AuthorizationCode | LoginMode::DeviceCode => "oauth",
+                    };
+                    if !kinds.contains(&kind) {
+                        kinds.push(kind);
+                    }
+                }
+                if kinds.is_empty() {
+                    kinds.push("api_key");
+                }
+                kinds
+            },
             login_modes,
             capabilities: ChannelCapabilities {
                 refresh: self.credential_refresh().is_some(),
                 quota_query: self.quota_query().is_some(),
                 quota_reset: self.quota_reset().is_some(),
                 services: self.services().is_some(),
-                // No accessor describes transport; a socket channel says so itself.
-                websocket: false,
+                // `websocket` and `paid_usage`: no accessor describes them, so a
+                // channel that has them says so itself.
+                ..Default::default()
             },
             config_keys: Vec::new(),
         }
+    }
+
+    /// Validate manually supplied secret material without making an upstream request.
+    /// Channels with structured cloud credentials override this at the storage boundary.
+    fn validate_credential_secret(&self, _secret: &Value) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
+    /// Expiry required by newly supplied material, e.g. an unexchanged service-account
+    /// key. Returning zero schedules refresh through the normal request-time flow.
+    fn initial_credential_expiry(&self, _secret: &Value) -> Option<i64> {
+        None
     }
 
     /// The outbound client this channel's upstream expects when nothing names
@@ -325,6 +364,30 @@ pub trait BaseChannel: Send + Sync {
         operations::http(self, Operation::StreamGenerateContent, context)
     }
 
+    /// Invoke the native RetrieveInteraction endpoint.
+    fn retrieve_interaction<'a>(
+        &'a self,
+        context: OperationContext<'a>,
+    ) -> OperationFuture<'a, WireResponse<HttpBody>> {
+        operations::http(self, Operation::RetrieveInteraction, context)
+    }
+
+    /// Invoke the native CancelInteraction endpoint.
+    fn cancel_interaction<'a>(
+        &'a self,
+        context: OperationContext<'a>,
+    ) -> OperationFuture<'a, WireResponse<HttpBody>> {
+        operations::http(self, Operation::CancelInteraction, context)
+    }
+
+    /// Invoke the native DeleteInteraction endpoint.
+    fn delete_interaction<'a>(
+        &'a self,
+        context: OperationContext<'a>,
+    ) -> OperationFuture<'a, WireResponse<HttpBody>> {
+        operations::http(self, Operation::DeleteInteraction, context)
+    }
+
     /// Standard OpenAI content moderation, returning category scores as JSON.
     fn create_moderation<'a>(
         &'a self,
@@ -333,20 +396,52 @@ pub trait BaseChannel: Send + Sync {
         operations::http(self, Operation::CreateModeration, context)
     }
 
-    /// Review content for safety.
-    fn guardian_review<'a>(
+    /// Evaluate typed predicate, choice and score questions with OpenAI Decisions.
+    fn create_decision<'a>(
         &'a self,
         context: OperationContext<'a>,
     ) -> OperationFuture<'a, WireResponse<HttpBody>> {
-        operations::http(self, Operation::GuardianReview, context)
+        operations::http(self, Operation::CreateDecision, context)
     }
 
-    /// Classify content using the native guardian operation.
-    fn guardian_classify<'a>(
+    /// Invoke the native CreateVoice endpoint.
+    fn create_voice<'a>(
         &'a self,
         context: OperationContext<'a>,
     ) -> OperationFuture<'a, WireResponse<HttpBody>> {
-        operations::http(self, Operation::GuardianClassify, context)
+        operations::http(self, Operation::CreateVoice, context)
+    }
+
+    /// Invoke the native CreateRealtimeClientSecret endpoint.
+    fn create_realtime_client_secret<'a>(
+        &'a self,
+        context: OperationContext<'a>,
+    ) -> OperationFuture<'a, WireResponse<HttpBody>> {
+        operations::http(self, Operation::CreateRealtimeClientSecret, context)
+    }
+
+    /// Invoke the native HangupRealtimeCall endpoint.
+    fn hangup_realtime_call<'a>(
+        &'a self,
+        context: OperationContext<'a>,
+    ) -> OperationFuture<'a, WireResponse<HttpBody>> {
+        operations::http(self, Operation::HangupRealtimeCall, context)
+    }
+
+    /// Invoke the native CreateLiveSession endpoint.
+    fn create_live_session<'a>(
+        &'a self,
+        context: OperationContext<'a>,
+    ) -> OperationFuture<'a, WireResponse<HttpBody>> {
+        operations::http(self, Operation::CreateLiveSession, context)
+    }
+
+    /// Invoke the native HangupLiveSession endpoint.
+    fn hangup_live_session<'a>(
+        &'a self,
+        context: OperationContext<'a>,
+    ) -> OperationFuture<'a, WireResponse<HttpBody>> {
+        operations::http(self, Operation::HangupLiveSession, context)
     }
 
     /// Compact an existing context.
@@ -534,6 +629,14 @@ pub trait BaseChannel: Send + Sync {
         operations::http(self, Operation::CreateRealtimeCall, context)
     }
 
+    /// Connect a native GPT-Live primary or sideband socket.
+    fn connect_live<'a>(
+        &'a self,
+        context: OperationContext<'a, ()>,
+    ) -> OperationFuture<'a, UpstreamConnection> {
+        operations::websocket(self, Operation::ConnectLive, context)
+    }
+
     /// Connect a duplex Realtime session.
     fn connect_realtime<'a>(
         &'a self,
@@ -570,10 +673,6 @@ pub trait BaseChannel: Send + Sync {
         None
     }
 
-    fn cookie_login(&self) -> Option<&dyn CookieLogin> {
-        None
-    }
-
     fn quota_query(&self) -> Option<&dyn QuotaQuery> {
         None
     }
@@ -600,6 +699,16 @@ pub trait BaseChannel: Send + Sync {
         max_bytes: u64,
     ) -> Option<Box<dyn ResponseReasonObserver>> {
         standard_reason_observer(headers, max_bytes)
+    }
+
+    /// What a refusal says about the credential that received it: rate
+    /// limited, quota or credit exhausted, unauthenticated, model not served,
+    /// or the request's own fault. Called for every non-2xx answer with a
+    /// bounded prefix of its body, and for an error frame opening a 2xx
+    /// stream. `None` leaves the decision to the status code. The default
+    /// reads structured fields only; override to add a vendor's own wording.
+    fn classify_rejection(&self, context: RejectionContext<'_>) -> Option<Rejection> {
+        standard_rejection(context)
     }
 
     /// Classify one complete incoming WS message; control frames carry no model verdict.

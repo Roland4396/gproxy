@@ -4,27 +4,29 @@
 
 **One API endpoint for your LLM services.**
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Русский](README.ru.md)
 
 [![Release](https://img.shields.io/github/v/release/LeenHawk/gproxy)](https://github.com/LeenHawk/gproxy/releases/latest)
 [![CI](https://github.com/LeenHawk/gproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/LeenHawk/gproxy/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FLeenHawk%2Fgproxy.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FLeenHawk%2Fgproxy?ref=badge_shield)
 [![Stars](https://img.shields.io/github/stars/LeenHawk/gproxy?style=flat)](https://github.com/LeenHawk/gproxy/stargazers)
 
 [Documentation](https://gproxy.leenhawk.com/) · [Downloads](https://github.com/LeenHawk/gproxy/releases) · [Discussions](https://github.com/LeenHawk/gproxy/discussions) · [Sponsor](https://github.com/sponsors/LeenHawk)
 
 [![Documentation](https://img.shields.io/badge/Documentation-gproxy.leenhawk.com-2563eb?style=for-the-badge)](https://gproxy.leenhawk.com/)
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev%2Fdeploy%2Fcloudflare-button)
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy&branch=dev&create_from_path=deploy%2Fserverless)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev%2Fdeploy%2Fserverless&project-name=gproxy&repository-name=gproxy&env=GPROXY_ADMIN_PASSWORD%2CGPROXY_MASTER_KEY&products=%5B%7B%22type%22%3A%22integration%22%2C%22group%22%3A%22postgres%22%2C%22protocol%22%3A%22storage%22%7D%5D)
-[![Deploy to Deno](https://img.shields.io/badge/Deploy_to-Deno-000000?style=for-the-badge&logo=deno)](https://console.deno.com/new?clone=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy&path=deploy%2Fserverless)
+<a href="https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev%2Fdeploy%2Fcloudflare-button"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" height="32"></a>
+<a href="https://app.netlify.com/start/deploy?repository=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy&branch=dev&create_from_path=deploy%2Fserverless"><img src="https://www.netlify.com/img/deploy/button.svg" alt="Deploy to Netlify" height="32"></a>
+<a href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev%2Fdeploy%2Fserverless&project-name=gproxy&repository-name=gproxy&env=GPROXY_ADMIN_PASSWORD%2CGPROXY_MASTER_KEY&products=%5B%7B%22type%22%3A%22integration%22%2C%22group%22%3A%22postgres%22%2C%22protocol%22%3A%22storage%22%7D%5D"><img src="https://vercel.com/button" alt="Deploy with Vercel" height="32"></a>
+<a href="https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="32"></a>
+<a href="https://heroku.com/deploy?template=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev"><img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy to Heroku" height="32"></a>
 
 </div>
 
 GPROXY is a self-hosted LLM API gateway written in Rust. Add your upstream accounts, configure model routes in the console, and call different services through the same endpoint and gateway API key. Provider changes, credential updates, usage, and costs are managed in one place.
 
-v4 runs as a desktop or mobile application with a setup wizard, a CLI service, a container, or on Cloudflare, Netlify, Vercel, and Deno. Use the [latest stable release](https://github.com/LeenHawk/gproxy/releases/latest) for regular deployments; development snapshots are available under [nightly](https://github.com/LeenHawk/gproxy/releases/tag/nightly).
+v4 runs as a desktop or mobile application with a setup wizard, a CLI service, a container, or on Cloudflare, Netlify, and Vercel. Use the [latest stable release](https://github.com/LeenHawk/gproxy/releases/latest) for regular deployments; development snapshots are available under [nightly](https://github.com/LeenHawk/gproxy/releases/tag/nightly).
 
 ## Features
 
@@ -56,7 +58,7 @@ v4 runs as a desktop or mobile application with a setup wizard, a CLI service, a
 </td>
 <td valign="top">
 <h3>Local and server deployments</h3>
-<p>Use the application on a personal device, run the CLI or container on a server, or deploy to Cloudflare, Netlify, Vercel, and Deno. Rust projects can embed the gateway through its SDK.</p>
+<p>Use the application on a personal device, run the CLI or container on a server, or deploy to Cloudflare, Netlify, and Vercel. Rust projects can embed the gateway through its SDK.</p>
 </td>
 </tr>
 </table>
@@ -71,18 +73,18 @@ Screenshots of the v4 console, using a separate demo instance with example data.
 
 **Providers and models** — Manage upstream accounts and model catalogs in one place.
 
-![Provider and model management](docs/images/readme/providers-en.webp)
+![Provider and model management](.github/readme/providers-en.webp)
 
 <details>
 <summary>View model routes and request rules</summary>
 
 **Model routes** — Configure providers, weights, and fallback tiers for a fixed model name.
 
-![Model route management](docs/images/readme/routes-en.webp)
+![Model route management](.github/readme/routes-en.webp)
 
 **Request rules** — Configure system text and cache breakpoints for a provider.
 
-![Request rule configuration](docs/images/readme/rules-en.webp)
+![Request rule configuration](.github/readme/rules-en.webp)
 
 </details>
 
@@ -124,31 +126,11 @@ curl -sS http://127.0.0.1:8787/v1/chat/completions \
 
 ### Hosted deployments
 
-Templates for Cloudflare, Netlify, Vercel, and Deno use prebuilt **latest stable release** bundles without compiling Rust. Cloudflare supports D1 or libSQL/Turso; the other three use PostgreSQL. Configure the database, administrator password, and master key, then deploy and sign in at `/console/`.
+Templates for Cloudflare, Netlify, and Vercel use prebuilt **latest stable release** bundles without compiling Rust. Cloudflare supports D1 or libSQL/Turso; the other two use PostgreSQL. Configure the database, administrator password, and master key, then deploy and sign in at `/console/`.
 
 See the [hosted deployment guide](https://gproxy.leenhawk.com/deployment/edge/) for deploy buttons, platform or external databases, and differences such as WebSocket support.
 
-These three templates package the **latest stable release** PostgreSQL executable in a lightweight container. Review the paid service and database plans before deploying.
-
-<table>
-<tr>
-<td width="33%" valign="top">
-<h3>Render</h3>
-<p>Starter service + Basic PostgreSQL. Database connection and secrets are set up automatically.</p>
-<p><a href="https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev"><strong>Deploy to Render →</strong></a></p>
-</td>
-<td width="33%" valign="top">
-<h3>Heroku</h3>
-<p>Basic dyno + Essential PostgreSQL. Bring your encryption key; the database is created for you.</p>
-<p><a href="https://heroku.com/deploy?template=https%3A%2F%2Fgithub.com%2FLeenHawk%2Fgproxy%2Ftree%2Fdev"><strong>Deploy to Heroku →</strong></a></p>
-</td>
-<td width="33%" valign="top">
-<h3>Northflank</h3>
-<p>Import the template to create a project, PostgreSQL database, and service. A public share link is not yet available.</p>
-<p><a href="https://gproxy.leenhawk.com/deployment/containers/#northflank"><strong>Import template →</strong></a></p>
-</td>
-</tr>
-</table>
+Render and Heroku templates package the **latest stable release** PostgreSQL executable in a lightweight container. Render runs a free web service with your external PostgreSQL database; Heroku creates a Basic dyno with Essential PostgreSQL. Review the service and database plans before deploying.
 
 [Setup and operating instructions](https://gproxy.leenhawk.com/deployment/containers/)
 
@@ -156,10 +138,10 @@ These three templates package the **latest stable release** PostgreSQL executabl
 
 | Option | Use case | Guide |
 | --- | --- | --- |
-| Application | Desktop or mobile, managed in the app | [Platform installation](https://gproxy.leenhawk.com/getting-started/installation/) |
-| CLI / container | Persistent server with a browser console | [Installation and containers](https://gproxy.leenhawk.com/getting-started/installation/) |
-| Cloudflare / Netlify / Vercel / Deno | Hosted service without your own server | [Deployment guide](https://gproxy.leenhawk.com/deployment/edge/) |
-| Northflank / Render / Heroku | Native container with managed PostgreSQL | [Deployment guide](https://gproxy.leenhawk.com/deployment/containers/) |
+| Application | Desktop or mobile, managed in the app | [Download & install](https://gproxy.leenhawk.com/download/) |
+| CLI / container | Persistent server with a browser console | [Download & install](https://gproxy.leenhawk.com/download/) |
+| Cloudflare / Netlify / Vercel | Hosted service without your own server | [Deployment guide](https://gproxy.leenhawk.com/deployment/edge/) |
+| Render / Heroku | Native container with managed PostgreSQL | [Deployment guide](https://gproxy.leenhawk.com/deployment/containers/) |
 | Rust SDK | Embed in your own program | [gproxy-sdk](crates/gproxy-sdk/README.md) |
 
 On Windows, both editions are available from Microsoft Store:
@@ -233,7 +215,7 @@ Node.js, pnpm or desktop libraries to build:
 
 ```sh
 cargo build --locked --release -p gproxy --bin gproxy \
-  --no-default-features --features channels,memory,fs,bundled-vocabulary
+  --no-default-features --features channels,memory,fs,bundled-vocabulary,postgres,mysql
 ./target/release/gproxy serve --console=false
 ```
 
@@ -260,9 +242,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 pnpm --dir console lint
 pnpm --dir console test
+git submodule update --init docs
 pnpm --dir docs install --frozen-lockfile
 pnpm --dir docs check
-pnpm --dir docs build
 ```
 
 See [Building from source](https://gproxy.leenhawk.com/deployment/release-build/) for desktop and WASM checks, [Architecture](https://gproxy.leenhawk.com/introduction/architecture/) for the workspace layout, and [Adding a channel](https://gproxy.leenhawk.com/guides/adding-a-channel/) for extensions.
@@ -272,6 +254,10 @@ Report bugs through [Issues](https://github.com/LeenHawk/gproxy/issues), or emai
 ## License
 
 The gateway application is **AGPL-3.0-or-later**; see [LICENSE](LICENSE). `gproxy-protocol`, `gproxy-protocol-macros`, `gproxy-client`, `gproxy-cache`, `gproxy-file`, `gproxy-seaorm`, and `gproxy-tokenizer` are **MIT**, with a license in each directory.
+
+## Powered by
+
+[![JetBrains logo](https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg)](https://jb.gg/OpenSource)
 
 ## Star History
 

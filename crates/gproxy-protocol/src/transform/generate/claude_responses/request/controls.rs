@@ -22,7 +22,6 @@ pub(super) fn to_responses(
         (input.fallbacks.is_some(), "fallbacks"),
         (input.inference_geo.is_some(), "inference_geo"),
         (input.speed.is_some(), "speed"),
-        (input.top_k.is_some(), "top_k"),
         (
             input
                 .output_config
@@ -38,9 +37,11 @@ pub(super) fn to_responses(
 
     out.max_output_tokens = Some(Some(input.max_tokens));
     out.stream = input.stream.map(Some);
-    out.temperature = number(input.temperature)?;
-    out.top_p = number(input.top_p)?;
-    out.user = input.metadata.as_ref().and_then(|v| v.user_id.clone());
+    out.user = input
+        .metadata
+        .as_ref()
+        .and_then(|v| v.user_id.clone())
+        .map(Some);
     out.service_tier = input.service_tier.map(|v| {
         Some(match v {
             c::ServiceTier::Auto => r::ServiceTier::Auto,
@@ -85,6 +86,25 @@ pub(super) fn to_responses(
             i::ReasoningConfig::builder().effort(Some(effort)).build(),
         ));
     }
+    // Claude thinking comes back with a signature to replay; the Responses
+    // counterpart is the encrypted reasoning, which a stateless upstream
+    // returns only when asked.
+    if matches!(
+        input.thinking,
+        Some(cc::ThinkingConfig::Enabled(_) | cc::ThinkingConfig::Adaptive(_))
+    ) {
+        let include = out
+            .include
+            .get_or_insert_with(|| Some(Vec::new()))
+            .get_or_insert_with(Vec::new);
+        if !include.contains(&r::ResponseIncludable::ReasoningEncryptedContent) {
+            include.push(r::ResponseIncludable::ReasoningEncryptedContent);
+            report.changed(
+                "thinking",
+                "include reasoning.encrypted_content so the thinking signature can be replayed",
+            );
+        }
+    }
     let display = match &input.thinking {
         Some(cc::ThinkingConfig::Adaptive(v)) => v.display,
         Some(cc::ThinkingConfig::Enabled(v)) => v.display,
@@ -116,10 +136,10 @@ pub(super) fn to_responses(
             report.omitted("output_format", "target requires an object schema");
         }
     }
-    if input.cache_control.is_some() || input.diagnostics.is_some() {
+    if input.diagnostics.is_some() {
         report.omitted(
             "advisory",
-            "Responses lacks Claude cache/diagnostic request metadata",
+            "Responses lacks Claude diagnostic request metadata",
         );
     }
     Ok(())
@@ -186,8 +206,24 @@ pub(super) fn to_claude(
         }
     }
     out.stream = input.stream.flatten();
-    out.temperature = float(&input.temperature)?;
-    out.top_p = float(&input.top_p)?;
+    for (field, present) in [
+        (
+            "temperature",
+            input
+                .temperature
+                .as_ref()
+                .and_then(Option::as_ref)
+                .is_some(),
+        ),
+        (
+            "top_p",
+            input.top_p.as_ref().and_then(Option::as_ref).is_some(),
+        ),
+    ] {
+        if present {
+            report.omitted(field, "Claude API 2026-10-21 rejects sampling parameters");
+        }
+    }
     out.service_tier = match input.service_tier.flatten() {
         None => None,
         Some(r::ServiceTier::Auto) => Some(c::ServiceTier::Auto),
@@ -203,17 +239,19 @@ pub(super) fn to_claude(
             None
         }
     };
-    if let Some(user) = &input.user {
+    if let Some(Some(user)) = &input.user {
         out.metadata = Some(c::Metadata::builder().user_id(user.clone()).build());
     }
     if let Some(config) = input.reasoning.as_ref().and_then(Option::as_ref) {
-        if config.mode.is_some()
-            || config.context.as_ref().and_then(Option::as_ref).is_some()
-            || config.summary.flatten().is_some()
-            || config.generate_summary.flatten().is_some()
-        {
+        if config.mode.is_some() || config.context.as_ref().and_then(Option::as_ref).is_some() {
             report.omitted("reasoning", "field has no target representation");
         }
+        // Any requested summary asks for visible thinking; Claude has one summarized form.
+        let summary = config
+            .summary
+            .flatten()
+            .or(config.generate_summary.flatten())
+            .is_some();
         if let Some(effort) = config.effort.flatten() {
             match effort {
                 i::ReasoningEffort::None => {
@@ -241,11 +279,19 @@ pub(super) fn to_claude(
                         | i::ReasoningEffort::Numeric(_) => unreachable!(),
                     };
                     out.output_config = Some(cc::OutputConfig::builder().effort(effort).build());
-                    out.thinking = Some(cc::ThinkingConfig::Adaptive(
-                        cc::ThinkingAdaptive::builder().build(),
-                    ));
+                    let mut adaptive = cc::ThinkingAdaptive::builder().build();
+                    if summary {
+                        adaptive.display = Some(cc::ThinkingDisplay::Summarized);
+                    }
+                    out.thinking = Some(cc::ThinkingConfig::Adaptive(adaptive));
                 }
             }
+        }
+        if summary && !matches!(out.thinking, Some(cc::ThinkingConfig::Adaptive(_))) {
+            report.omitted(
+                "reasoning.summary",
+                "Claude shows a thinking summary only when thinking is enabled",
+            );
         }
     }
     if let Some(text) = &input.text {
@@ -277,8 +323,15 @@ pub(super) fn to_claude(
     for (present, name) in [
         (input.metadata.is_some(), "metadata"),
         (input.include.is_some(), "include"),
-        (input.prompt_cache_key.is_some(), "prompt_cache_key"),
-        (input.prompt_cache_options.is_some(), "prompt_cache_options"),
+        (
+            input.prompt_cache_key.is_some()
+                && (input.prompt_cache_options.is_some()
+                    || crate::transform::generate::prompt_cache::key_implicit(
+                        input.prompt_cache_key.as_ref(),
+                    )
+                    .is_none()),
+            "prompt_cache_key",
+        ),
         (
             input.prompt_cache_retention.is_some(),
             "prompt_cache_retention",
@@ -294,14 +347,4 @@ pub(super) fn to_claude(
         }
     }
     Ok(())
-}
-
-fn number(v: Option<f64>) -> Result<Option<Option<serde_json::Number>>, TransformError> {
-    Ok(v.and_then(serde_json::Number::from_f64).map(Some))
-}
-
-fn float(v: &Option<Option<serde_json::Number>>) -> Result<Option<f64>, TransformError> {
-    Ok(v.as_ref()
-        .and_then(Option::as_ref)
-        .and_then(serde_json::Number::as_f64))
 }

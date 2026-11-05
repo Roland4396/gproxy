@@ -17,6 +17,8 @@ case "$TARGET_OS:$TARGET_TRIPLE" in
     bash "$root/scripts/build-musl-application.sh"
     ;;
   linux:* | macos:*)
+    # Cargo caches include old installers; only package this build's bundles.
+    rm -rf "$root/target/$TARGET_TRIPLE/release/bundle"
     bundle=deb
     [ "$TARGET_OS" != macos ] || bundle=dmg
     if [ "$TARGET_OS" = linux ]; then
@@ -33,7 +35,8 @@ case "$TARGET_OS:$TARGET_TRIPLE" in
     fi
     if [ "$TARGET_OS" = macos ]; then
       apps=("$root/target/$TARGET_TRIPLE/release/bundle/macos/"*.app)
-      test "${#apps[@]}" -eq 1 && test -d "${apps[0]}"
+      test "${#apps[@]}" -eq 1
+      test -d "${apps[0]}"
       work="$(mktemp -d)"
       trap 'rm -rf "$work"' EXIT
       cp -R "${apps[0]}" "$work/"
@@ -44,7 +47,9 @@ case "$TARGET_OS:$TARGET_TRIPLE" in
       trap - EXIT
     else
       files=("$root/target/$TARGET_TRIPLE/release/bundle/deb/"*.deb)
-      test "${#files[@]}" -eq 1 && test -f "${files[0]}"
+      test "${#files[@]}" -eq 1
+      test -f "${files[0]}"
+      test "$(dpkg-deb -f "${files[0]}" Version)" = "$GPROXY_BUILD_VERSION"
       python3 "$root/scripts/reproducible-deb.py" "${files[0]}" "$output/$ARTIFACT_NAME.deb"
       work="$(mktemp -d)"
       dpkg-deb -x "${files[0]}" "$work"
@@ -57,11 +62,7 @@ case "$TARGET_OS:$TARGET_TRIPLE" in
   windows:*)
     bash "$root/scripts/with-tauri-desktop-lib.sh" pnpm exec tauri build --ci --target "$TARGET_TRIPLE" --no-bundle --config "$config" -- --locked
     binary="$root/target/$TARGET_TRIPLE/release/gproxy-desktop.exe"
-    if [ "$TARGET_TRIPLE" = aarch64-pc-windows-msvc ]; then
-      upx --best --nrv2e "$binary"
-    else
-      upx --best --lzma "$binary"
-    fi
+    upx --best --lzma "$binary"
     upx --test "$binary"
     cd "$root"
     pwsh -NoProfile -File scripts/package-windows-msix.ps1 \
@@ -71,28 +72,14 @@ case "$TARGET_OS:$TARGET_TRIPLE" in
       -Target "$TARGET_TRIPLE" -Artifact "$ARTIFACT_NAME" -OutputDir dist/release
     ;;
   android:*)
-    export CARGO_PROFILE_RELEASE_LTO=fat CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
-    source "$root/scripts/android/sdk.sh"
-    ndk="$(android_ndk_root)"
-    export ANDROID_NDK_HOME="$ndk"
-    export GPROXY_ANDROID_ABI="$(android_abi "$TARGET_TRIPLE")"
-    export "CMAKE_TOOLCHAIN_FILE_${TARGET_TRIPLE//-/_}=$root/scripts/cmake/android.cmake"
-    ranlib=("$ndk"/toolchains/llvm/prebuilt/*/bin/llvm-ranlib)
-    test "${#ranlib[@]}" -eq 1 && test -x "${ranlib[0]}"
-    # OpenSSL's cc-rs lookup otherwise falls back to the removed GNU ranlib.
-    export "RANLIB_${TARGET_TRIPLE//-/_}=${ranlib[0]}"
-    arch="${TARGET_TRIPLE%%-*}"
-    bindgen="BINDGEN_EXTRA_CLANG_ARGS_${TARGET_TRIPLE//-/_}"
-    export "$bindgen=--target=${TARGET_TRIPLE}28"
-    bash "$root/scripts/with-tauri-android-lib.sh" pnpm exec tauri android build --ci --apk --target "$arch" --config "$config" -- --locked
     cd "$root"
+    # Reuse the channel-aware Android builder; this entrypoint owns release signing.
+    GPROXY_ANDROID_FRONTEND_READY=1 bash scripts/mobile/build-android.sh direct "${TARGET_TRIPLE%%-*}"
+    source scripts/android/sdk.sh
     sdk="$(android_sdk_root)"
-    apk_dir=crates/gproxy-host-tauri/gen/android/app/build/outputs/apk
-    mapfile -t files < <(find "$apk_dir" -name '*-release-unsigned.apk')
-    test "${#files[@]}" -eq 1
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
-    "$(android_build_tool "$sdk" zipalign)" -f -P 16 4 "${files[0]}" "$work/aligned.apk"
+    cp "dist/mobile/direct/${TARGET_TRIPLE%%-*}/gproxy-direct-${TARGET_TRIPLE%%-*}.apk" "$work/aligned.apk"
     if [ "${GPROXY_UNSIGNED_BUILD:-0}" = 1 ]; then
       cp "$work/aligned.apk" "$output/$ARTIFACT_NAME.apk"
     else

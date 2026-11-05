@@ -33,7 +33,7 @@ use gproxy_protocol::{
 };
 use gproxy_seaorm::{BatchConnectionTrait, BatchStatement};
 use gproxy_store::entity::upstream::{model, provider_model};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryTrait, Set, sea_query::OnConflict};
 use serde_json::{Value, json};
 use web_time::Instant;
 
@@ -231,46 +231,96 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Connectivity<'_, C> {
         provider_id: &str,
         credential_id: Option<&str>,
     ) -> SdkResult<Vec<DiscoveredModelDto>> {
+        self.discover_models_with_credentials(provider_id, credential_id, None)
+            .await
+    }
+
+    async fn discover_models_with_credentials(
+        &self,
+        provider_id: &str,
+        credential_id: Option<&str>,
+        allowed: Option<&BTreeSet<String>>,
+    ) -> SdkResult<Vec<DiscoveredModelDto>> {
         let snapshot = self.writer.core().snapshot();
         let provider = provider(&snapshot, provider_id)?;
-        let credentials = credentials(&snapshot, provider, credential_id)?;
-        let dialect = native_dialect(provider, Operation::ListModels)?;
-        let path = directory_path(dialect);
-        let wire = WireRequest {
-            method: http::Method::GET,
-            path: path.to_owned(),
-            query: None,
-            headers: HeaderMap::new(),
-            body: HttpBody::Bytes(Bytes::new()),
-        };
-        let context = self.context(
-            &snapshot,
-            OperationKey {
-                operation: Operation::ListModels,
-                dialect,
-            },
-            provider,
-            credentials,
-            None,
-        );
-        let execution = self.writer.core().list_models(context, wire).await?;
-        let (response, settled) = execution.into_parts();
-        let status = response.status;
-        let payload = read(
-            response.body,
-            snapshot.limits.max_response_body_bytes as usize,
-        )
-        .await;
-        drop(rt::timeout(TRACE_TIMEOUT, settled).await);
-        if !status.is_success() {
-            return Err(SdkError::Upstream {
-                status: status.as_u16(),
-                body: upstream_error(status, &payload),
-            });
+        let mut credentials = credentials(&snapshot, provider, credential_id)?;
+        credentials.retain(|credential| allowed.is_none_or(|ids| ids.contains(&credential.id)));
+        if credentials.is_empty() {
+            return Err(SdkError::NoTarget(provider_id.into()));
         }
-        let document: Value = serde_json::from_slice(&payload).map_err(|error| {
-            SdkError::invalid(format!("the model directory is not JSON: {error}"))
-        })?;
+        let dialect = native_dialect(provider, Operation::ListModels)?;
+        // Discovery is an upstream read, independent of downstream list/get
+        // routing rules. Keep transport, credentials and endpoint overrides.
+        let mut discovery_provider = provider.as_ref().clone();
+        discovery_provider
+            .operation_rules
+            .retain(|rule| rule.operation != Operation::ListModels.id());
+        let discovery_provider = Arc::new(discovery_provider);
+        // Gemini pages its directory (50 models by default); follow
+        // `nextPageToken` and merge every page into one document.
+        let mut document: Option<Value> = None;
+        let mut query = None;
+        let mut seen = BTreeSet::new();
+        loop {
+            let wire = WireRequest {
+                method: http::Method::GET,
+                path: directory_path(dialect),
+                query: query.take(),
+                headers: HeaderMap::new(),
+                body: HttpBody::Bytes(Bytes::new()),
+            };
+            let context = self.context(
+                &snapshot,
+                OperationKey {
+                    operation: Operation::ListModels,
+                    dialect,
+                },
+                &discovery_provider,
+                credentials.clone(),
+                None,
+            );
+            let execution = self.writer.core().list_models(context, wire).await?;
+            let (response, settled) = execution.into_parts();
+            let status = response.status;
+            let payload = read(
+                response.body,
+                snapshot.limits.max_response_body_bytes as usize,
+            )
+            .await;
+            drop(rt::timeout(TRACE_TIMEOUT, settled).await);
+            if !status.is_success() {
+                return Err(SdkError::Upstream {
+                    status: status.as_u16(),
+                    body: upstream_error(status, &payload),
+                });
+            }
+            let mut page: Value = serde_json::from_slice(&payload).map_err(|error| {
+                SdkError::invalid(format!("the model directory is not JSON: {error}"))
+            })?;
+            let token = (dialect == Dialect::Gemini)
+                .then(|| page.get("nextPageToken").and_then(Value::as_str))
+                .flatten()
+                .filter(|token| !token.is_empty() && seen.insert(token.to_string()))
+                .map(str::to_owned);
+            match &mut document {
+                None => document = Some(page),
+                Some(merged) => {
+                    if let (Some(all), Some(Value::Array(more))) = (
+                        merged.get_mut("models").and_then(Value::as_array_mut),
+                        page.get_mut("models").map(Value::take),
+                    ) {
+                        all.extend(more);
+                    }
+                }
+            }
+            let Some(token) = token else { break };
+            query = Some(
+                url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("pageToken", &token)
+                    .finish(),
+            );
+        }
+        let document = document.unwrap_or_default();
         let known: BTreeSet<&str> = provider
             .models
             .iter()
@@ -282,11 +332,13 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Connectivity<'_, C> {
             .models()
             .query(model::Entity::find())
             .await?;
+        let prices = super::pricing::ModelPriceRules::load(self.writer).await?;
         model_names(dialect, &document)
             .into_iter()
             .map(|upstream_name| {
                 Ok(DiscoveredModelDto {
                     known: known.contains(upstream_name.as_str()),
+                    has_price: Some(prices.has_price(Some(provider_id), &upstream_name)),
                     has_default_price: catalog::has_default_price(&upstream_name),
                     metadata: import_metadata(
                         &upstream_name,
@@ -297,6 +349,59 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Connectivity<'_, C> {
                 })
             })
             .collect::<SdkResult<Vec<_>>>()
+    }
+
+    /// Refresh the stored catalog using only credentials visible to the caller.
+    /// Existing rows, including disabled models and operator metadata, are preserved.
+    pub async fn refresh_models(
+        &self,
+        provider_id: &str,
+        allowed_credentials: &BTreeSet<String>,
+    ) -> SdkResult<()> {
+        let discovered = self
+            .discover_models_with_credentials(provider_id, None, Some(allowed_credentials))
+            .await?;
+        let existing: BTreeSet<String> = self
+            .writer
+            .store()
+            .provider_models()
+            .query(
+                provider_model::Entity::find()
+                    .filter(provider_model::Column::ProviderId.eq(provider_id)),
+            )
+            .await?
+            .into_iter()
+            .map(|row| row.upstream_name)
+            .collect();
+        let statements = discovered
+            .into_iter()
+            .filter(|row| !existing.contains(&row.upstream_name))
+            .map(|row| {
+                BatchStatement::Execute(
+                    provider_model::Entity::insert(provider_model::ActiveModel {
+                        id: Set(crate::ids::random_id()),
+                        provider_id: Set(provider_id.into()),
+                        upstream_name: Set(row.upstream_name),
+                        model_id: Set(None),
+                        metadata: Set(row.metadata),
+                        enabled: Set(true),
+                    })
+                    .on_conflict(
+                        OnConflict::columns([
+                            provider_model::Column::ProviderId,
+                            provider_model::Column::UpstreamName,
+                        ])
+                        .do_nothing_on([provider_model::Column::Id])
+                        .to_owned(),
+                    )
+                    .build(self.writer.backend()),
+                )
+            })
+            .collect::<Vec<_>>();
+        if !statements.is_empty() {
+            self.writer.commit(statements, &[Scope::Models]).await?;
+        }
+        Ok(())
     }
 
     /// Add discovered names to a provider's catalog. Names it already offers
@@ -360,59 +465,6 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Connectivity<'_, C> {
     }
 
     /// The client a probe of this scope should go out through.
-    /// Read OpenRouter's public metadata using the instance's configured client.
-    /// Importing the returned rows is a separate model write chosen by the caller.
-    pub async fn openrouter_models(&self) -> SdkResult<Vec<DiscoveredModelDto>> {
-        let (client, _) = self
-            .probe_client(&ConnectivityTest {
-                scope: ConnectivityScope::Global,
-                proxy: None,
-            })
-            .await?;
-        rt::timeout(PROBE_TIMEOUT, async {
-            let request = http::Request::get(
-                "https://openrouter.ai/api/v1/models?limit=1000&output_modalities=all",
-            )
-            .body(HttpBody::Bytes(Bytes::new()))
-            .map_err(|error| SdkError::invalid(error.to_string()))?;
-            let response = client
-                .send(request)
-                .await
-                .map_err(|error| SdkError::invalid(format!("OpenRouter: {error}")))?;
-            let status = response.status;
-            let body = read(response.body, usize::MAX).await;
-            if !status.is_success() {
-                return Err(SdkError::invalid(upstream_error(status, &body)));
-            }
-            let document: Value = serde_json::from_slice(&body)
-                .map_err(|error| SdkError::invalid(format!("OpenRouter: {error}")))?;
-            let rows = document["data"]
-                .as_array()
-                .ok_or_else(|| SdkError::invalid("OpenRouter response has no model list"))?;
-            let mut seen = BTreeSet::new();
-            rows.iter()
-                .filter_map(|row| {
-                    let id = model_name(Dialect::OpenAi, row)?;
-                    let name = id.rsplit('/').next()?.trim();
-                    if name.is_empty() || !seen.insert(name.to_ascii_lowercase()) {
-                        return None;
-                    }
-                    Some((name.to_owned(), row))
-                })
-                .map(|(name, row)| {
-                    Ok(DiscoveredModelDto {
-                        upstream_name: name,
-                        metadata: model_metadata(Some(row))?,
-                        known: false,
-                        has_default_price: false,
-                    })
-                })
-                .collect::<SdkResult<Vec<_>>>()
-        })
-        .await
-        .ok_or_else(|| SdkError::invalid("OpenRouter model query timed out"))?
-    }
-
     async fn probe_client(
         &self,
         request: &ConnectivityTest,
@@ -628,12 +680,22 @@ fn native_dialect(provider: &Arc<ProviderData>, operation: Operation) -> SdkResu
             operation,
         )
         .into_iter()
-        .find(|dialect| !matches!(dialect, Dialect::OpenAiResponsesWebSocket))
+        .find(|dialect| {
+            !matches!(dialect, Dialect::OpenAiResponsesWebSocket)
+                && !(operation == Operation::ListModels && *dialect == Dialect::GeminiInteractions)
+        })
         .ok_or_else(|| {
-            SdkError::invalid(format!(
-                "channel `{}` speaks no HTTP dialect for {operation:?}",
-                provider.entity.channel
-            ))
+            SdkError::invalid(if operation == Operation::ListModels {
+                format!(
+                    "channel `{}` does not support upstream model discovery; add models manually",
+                    provider.entity.channel
+                )
+            } else {
+                format!(
+                    "channel `{}` speaks no HTTP dialect for {operation:?}",
+                    provider.entity.channel
+                )
+            })
         })
 }
 
@@ -666,6 +728,9 @@ fn probe_body(dialect: Dialect, model: &str) -> Value {
             "messages": [{ "role": "user", "content": "ping" }],
             "max_tokens": 16,
         }),
+        Dialect::GeminiInteractions => {
+            json!({"model":model,"input":"ping","store":false,"generation_config":{"max_output_tokens":16}})
+        }
         Dialect::Gemini => json!({
             "contents": [{ "role": "user", "parts": [{ "text": "ping" }] }],
             "generationConfig": { "maxOutputTokens": 16 },
@@ -737,9 +802,13 @@ fn tokens(usage: &NormalizedUsage) -> UsageTokensDto {
         input_tokens: usage.tokens.input_tokens,
         output_tokens: usage.tokens.output_tokens,
         cached_input_tokens: usage.tokens.cached_input_tokens,
-        cache_creation_5m_tokens: usage.tokens.cache_creation_5m_tokens,
-        cache_creation_30m_tokens: usage.tokens.cache_creation_30m_tokens,
-        cache_creation_1h_tokens: usage.tokens.cache_creation_1h_tokens,
+        cache_creation: usage
+            .tokens
+            .cache_creation
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect(),
         reasoning_tokens: usage.tokens.reasoning_tokens,
     }
 }

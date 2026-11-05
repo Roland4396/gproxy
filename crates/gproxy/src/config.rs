@@ -132,7 +132,7 @@ pub fn layer(options: &cli::Options, file: Option<AppConfig>) -> Result<Settings
     // Not a flag override: the default belongs here rather than in `AppConfig`,
     // because the edge host has no filesystem to resolve it against.
     if config.data_dir.is_none() {
-        config.data_dir = Some(DEFAULT_DATA_DIR.to_owned());
+        config.data_dir = Some(default_data_dir());
     }
 
     if let Some(store) = store_backend(options)? {
@@ -359,6 +359,54 @@ fn list(value: &str) -> Vec<String> {
         .filter(|entry| !entry.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// `./data`, except for a Windows install that has no setup step of its own:
+/// an MSIX package or a WinGet portable install. Those are started from the
+/// Start menu, a shell in any directory, or the WinGet validator, often with
+/// `System32` as the working directory, which only an elevated process can
+/// write. They keep their data per user, in the directory `install.ps1`
+/// offers too. A ZIP unpacked by hand stays portable.
+fn default_data_dir() -> String {
+    #[cfg(windows)]
+    if (packaged() || winget_installed())
+        && let Some(local) = std::env::var_os("LOCALAPPDATA")
+    {
+        return Path::new(&local)
+            .join("GPROXY")
+            .to_string_lossy()
+            .into_owned();
+    }
+    DEFAULT_DATA_DIR.to_owned()
+}
+
+/// Whether this executable is a WinGet portable install: WinGet unpacks it
+/// under `…\WinGet\Packages\` (per user or per machine) and starts it
+/// through a link in `…\WinGet\Links\`. Both the path as started and the
+/// resolved one are checked.
+#[cfg(windows)]
+fn winget_installed() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let resolved = std::fs::canonicalize(&exe).ok();
+    std::iter::once(exe).chain(resolved).any(|path| {
+        let path = path.to_string_lossy().to_ascii_lowercase();
+        path.contains("\\winget\\packages\\") || path.contains("\\winget\\links\\")
+    })
+}
+
+/// Whether this process has package identity, i.e. runs from an MSIX install.
+#[cfg(windows)]
+fn packaged() -> bool {
+    use windows_sys::Win32::{
+        Foundation::APPMODEL_ERROR_NO_PACKAGE, Storage::Packaging::Appx::GetCurrentPackageFullName,
+    };
+    let mut length = 0;
+    // A size query has no buffer to write and only tells us whether we have package identity.
+    unsafe {
+        GetCurrentPackageFullName(&mut length, std::ptr::null_mut()) != APPMODEL_ERROR_NO_PACKAGE
+    }
 }
 
 /// A value the operator actually supplied. An empty string counts as silence:

@@ -160,11 +160,6 @@ pub async fn assemble(
                 rewrite_rule_sets,
                 credential_strategy: config.credential_strategy,
                 model_credentials: config.model_credentials,
-                session_affinity: config.session_affinity.unwrap_or(matches!(
-                    config.credential_strategy,
-                    crate::CredentialStrategy::Sticky
-                        | crate::CredentialStrategy::RoundRobinAffinity
-                )),
             },
         );
     }
@@ -253,6 +248,7 @@ pub async fn assemble(
             version: row.version,
             expires_at_ms: row.expires_at_ms,
             secret,
+            metadata: row.metadata.clone(),
             status: row.status,
             status_reason: row.status_reason.clone(),
         });
@@ -275,7 +271,6 @@ pub async fn assemble(
                 label: row.label.clone(),
                 auth_kind: row.auth_kind.clone(),
                 enabled: row.enabled,
-                metadata: row.metadata.clone(),
                 client,
                 websocket_client,
                 state,

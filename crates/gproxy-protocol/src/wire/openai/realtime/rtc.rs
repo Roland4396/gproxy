@@ -9,6 +9,7 @@ use crate::{
 #[derive(Debug, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CreateRealtimeCallMultipartForm {
     pub sdp: MultipartPart,
     pub session: Option<RealtimeSessionCreateRequest>,
@@ -19,8 +20,8 @@ pub type CreateRealtimeCallResponse = WireResponse<HttpBody>;
 pub type RealtimeCallSessionJson = RealtimeSessionCreateRequest;
 
 /// Frameless WebRTC setup at `POST /v1/live`. Unlike Realtime, this session
-/// has no required `type: realtime`. Source: samples/codex/codex-rs/codex-api/
-/// src/endpoint/realtime_websocket/methods_frameless_bidi.rs::session_json.
+/// has no required `type: realtime`.
+// Source: samples/codex/codex-rs/codex-api/src/endpoint/realtime_websocket/methods_frameless_bidi.rs::session_json.
 #[derive(
     Debug,
     Clone,
@@ -31,6 +32,7 @@ pub type RealtimeCallSessionJson = RealtimeSessionCreateRequest;
     gproxy_protocol_macros::DeclaredFields,
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LiveSessionCreateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -56,6 +58,7 @@ pub struct LiveSessionCreateRequest {
     gproxy_protocol_macros::DeclaredFields,
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LiveDelegation {
     #[serde(rename = "type")]
     pub type_: String,
@@ -75,6 +78,7 @@ pub struct LiveDelegation {
     gproxy_protocol_macros::DeclaredFields,
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LiveInitialMessage {
     #[serde(rename = "type")]
     pub type_: String,
@@ -94,6 +98,7 @@ pub struct LiveInitialMessage {
     gproxy_protocol_macros::DeclaredFields,
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LiveInitialText {
     #[serde(rename = "type")]
     pub type_: String,
@@ -104,6 +109,7 @@ pub struct LiveInitialText {
 
 #[derive(Debug, gproxy_protocol_macros::WireBuilder, gproxy_protocol_macros::DeclaredFields)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CreateLiveCallMultipartForm {
     pub sdp: MultipartPart,
     pub session: LiveSessionCreateRequest,
@@ -114,11 +120,16 @@ pub type CreateLiveCallResponse = WireResponse<HttpBody>;
 /// HTTP/WS entry paths for the OpenAI realtime family. The host still owns
 /// authentication, model routing and upgrading the connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeRoute<'a> {
     CreateCall,
     CreateLiveCall,
     Connect,
     Live { call_id: Option<&'a str> },
+    HangupCall { call_id: &'a str },
+    CreateLiveSession,
+    LiveSession { session_id: Option<&'a str> },
+    HangupLiveSession { session_id: &'a str },
 }
 impl<'a> RealtimeRoute<'a> {
     /// `/live` serves HTTP setup and a WebSocket; the method disambiguates it.
@@ -127,7 +138,15 @@ impl<'a> RealtimeRoute<'a> {
         match (method, route) {
             (&http::Method::POST, Self::Live { call_id: None }) => Some(Self::CreateLiveCall),
             (&http::Method::POST, Self::CreateCall) => Some(route),
-            (&http::Method::GET, Self::Connect | Self::Live { .. }) => Some(route),
+            (&http::Method::POST, Self::LiveSession { session_id: None }) => {
+                Some(Self::CreateLiveSession)
+            }
+            (&http::Method::POST, Self::HangupCall { .. } | Self::HangupLiveSession { .. }) => {
+                Some(route)
+            }
+            (&http::Method::GET, Self::Connect | Self::Live { .. } | Self::LiveSession { .. }) => {
+                Some(route)
+            }
             _ => None,
         }
     }
@@ -140,6 +159,17 @@ impl<'a> RealtimeRoute<'a> {
             "realtime/calls" => Some(Self::CreateCall),
             "realtime" => Some(Self::Connect),
             "live" => Some(Self::Live { call_id: None }),
+            "live/sessions" => Some(Self::LiveSession { session_id: None }),
+            _ if path.starts_with("realtime/calls/") => segment(path, "realtime/calls/", "/hangup")
+                .map(|call_id| Self::HangupCall { call_id }),
+            _ if path.starts_with("live/sessions/") => segment(path, "live/sessions/", "/attach")
+                .map(|session_id| Self::LiveSession {
+                    session_id: Some(session_id),
+                })
+                .or_else(|| {
+                    segment(path, "live/sessions/", "/hangup")
+                        .map(|session_id| Self::HangupLiveSession { session_id })
+                }),
             _ => path
                 .strip_prefix("live/")
                 .filter(|id| !id.is_empty() && !id.contains('/') && !matches!(*id, "." | ".."))
@@ -150,9 +180,19 @@ impl<'a> RealtimeRoute<'a> {
         crate::OperationKey {
             operation: match self {
                 Self::CreateCall | Self::CreateLiveCall => crate::Operation::CreateRealtimeCall,
+                Self::HangupCall { .. } => crate::Operation::HangupRealtimeCall,
+                Self::CreateLiveSession => crate::Operation::CreateLiveSession,
+                Self::LiveSession { .. } => crate::Operation::ConnectLive,
+                Self::HangupLiveSession { .. } => crate::Operation::HangupLiveSession,
                 _ => crate::Operation::ConnectRealtime,
             },
             dialect: crate::Dialect::OpenAi,
         }
     }
+}
+
+fn segment<'a>(path: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    path.strip_prefix(prefix)?
+        .strip_suffix(suffix)
+        .filter(|id| !id.is_empty() && !id.contains('/') && !matches!(*id, "." | ".."))
 }

@@ -27,10 +27,12 @@ fn claude_models_round_trip_pagination_and_capabilities() {
                 "context_management": {"clear_thinking_20251015": {"supported": true}, "clear_tool_uses_20250919": {"supported": false}, "compact_20260112": {"supported": true}, "supported": true},
                 "effort": {"high": {"supported": true}, "low": {"supported": true}, "max": {"supported": false}, "medium": {"supported": true}, "supported": true, "xhigh": {"supported": false}},
                 "image_input": {"supported": true}, "pdf_input": {"supported": true}, "structured_outputs": {"supported": true},
-                "thinking": {"supported": true, "types": {"adaptive": {"supported": true}, "enabled": {"supported": true}}}
+                "compaction": {"supported": true, "summarize": {"supported": true}},
+                "thinking": {"supported": true, "types": {"adaptive": {"supported": true}, "enabled": {"supported": true}, "between_tools": {"supported": false}}}
             },
             "created_at": "2026-02-04T00:00:00Z", "display_name": "Claude Opus 4.6",
-            "max_input_tokens": 200000, "max_tokens": 32000, "type": "model", "new_capability": "future"
+            "max_input_tokens": 200000, "max_tokens": 32000, "type": "model", "new_capability": "future",
+            "lifecycle": "active", "deprecated_at": null, "retires_at": null
         }],
         "first_id": "first", "has_more": true, "last_id": "last"
     });
@@ -38,6 +40,17 @@ fn claude_models_round_trip_pagination_and_capabilities() {
         serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
     assert!(parsed.has_more);
+    use gproxy_protocol::wire::DeclaredFields;
+    let declared = serde_json::to_value(parsed.clone().into_declared()).unwrap();
+    assert_eq!(declared["data"][0]["lifecycle"], "active");
+    assert_eq!(
+        declared["data"][0]["capabilities"]["thinking"]["types"]["between_tools"]["supported"],
+        false
+    );
+    assert_eq!(
+        declared["data"][0]["capabilities"]["compaction"]["summarize"]["supported"],
+        true
+    );
     let output = serde_json::to_value(parsed).unwrap();
     assert_eq!(output["data"][0]["new_capability"], "future");
     assert_eq!(
@@ -151,4 +164,34 @@ fn model_queries_and_headers_are_separate_from_response_json() {
         })
     );
     assert_eq!(response.status, http::StatusCode::OK);
+}
+
+#[test]
+fn codex_model_messages_remain_declared_and_preserve_literal_catalog_text() {
+    use gproxy_protocol::wire::DeclaredFields;
+    use serde_json::json;
+    let messages = json!({
+        "apps": {"usage_instructions":"  {{literal}}\r\n"},
+        "tools": {
+            "history": {"namespace_description":"History", "list_windows":{"description":"List", "parameters":"{\"type\":\"object\"}"}, "read_item":{"description":""}},
+            "notes": {"write_file":{"description":"Write notes"}},
+            "context_management": {"new_context":{"description":"Continue"}, "get_context_remaining":{"description":"Remaining"}},
+            "incremental_tools": {"tool_update_hint":"", "namespace_instructions_prefix":"Namespace {name}"}
+        },
+        "approvals": {"request_permissions":"Permission requests", "auto_review_suffix":"Review", "granular":{"intro":"{{ policy }}", "prompted_categories":"{{ categories }}", "rejected_categories":"Denied {{ categories }}"}},
+        "permissions": {"approved_prefixes":"", "approved_command_prefix_saved":"Saved", "writable_root":"{{ roots }}", "writable_roots":"Roots: {{ roots }}", "omitted_paths":"Omitted", "denied_reads":"{{ denied_reads }}"}
+    });
+    let model: openai::models::Model = serde_json::from_value(json!({
+        "id":"gpt-catalog", "model_messages":messages, "future_model":true
+    }))
+    .unwrap();
+    let declared = serde_json::to_value(model.into_declared()).unwrap();
+    assert_eq!(declared["model_messages"], messages);
+    assert!(declared.get("future_model").is_none());
+    let alias: openai::models::ApprovalMessages =
+        serde_json::from_value(json!({"request_permissions_tool":""})).unwrap();
+    assert_eq!(
+        serde_json::to_value(alias.into_declared()).unwrap(),
+        json!({"request_permissions":""})
+    );
 }

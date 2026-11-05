@@ -2,8 +2,9 @@
 //! only part of it. Input tokens come from the text the request carried,
 //! counted with the tokenizer selected for the upstream model (a custom
 //! vocabulary from the model catalog, the Setting default, or the bundled
-//! encoders); output tokens are a coarse half-of-bytes guess over the
-//! response body. Everything estimated is marked `estimated=true` and
+//! encoders); output tokens are a coarse one-token-per-two-characters guess
+//! over generated text only, excluding wire framing and metadata.
+//! Everything estimated is marked `estimated=true` and
 //! `Partial`; reported values are never overwritten.
 //!
 //! Only operations that are metered in tokens are estimated (see
@@ -86,15 +87,15 @@ impl Estimator {
     /// Fill the token counts the upstream did not report, for an operation
     /// that [`estimates`]; any other operation keeps what was reported.
     /// `operation` is the native call's key, which names the wire shape of
-    /// `request_body`; `response_bytes` is what was read of the response,
-    /// whole or streamed.
+    /// `request_body`; `output_characters` counts only generated text read
+    /// from the response, whole or streamed.
     pub(crate) fn complete(
         &self,
         operation: OperationKey,
         provider_id: &str,
         model: Option<&str>,
         request_body: Option<&[u8]>,
-        response_bytes: u64,
+        output_characters: u64,
         reported: Option<NormalizedUsage>,
     ) -> Option<NormalizedUsage> {
         if !estimates(operation.operation) {
@@ -112,12 +113,10 @@ impl Estimator {
                 estimated = true;
             }
         }
-        // Coarse by design: the response is JSON or SSE framing around the
-        // generated text, and half its bytes is a rough stand-in for the
-        // tokens inside. Refining it needs per-dialect stream parsing, which
-        // the usage observer already does whenever the upstream reports.
-        if usage.tokens.output_tokens.is_none() && response_bytes > 0 {
-            usage.tokens.output_tokens = Some(response_bytes.div_ceil(2));
+        // Same character heuristic as Tokenizer::character_estimate, applied
+        // once to all generated content, independent of transport chunking.
+        if usage.tokens.output_tokens.is_none() && output_characters > 0 {
+            usage.tokens.output_tokens = Some(output_characters.div_ceil(2));
             estimated = true;
         }
         if estimated {
@@ -145,7 +144,10 @@ fn estimates(operation: Operation) -> bool {
     operation.produces_usage()
         && !matches!(
             operation,
-            Operation::CreateVideo | Operation::WebSearch | Operation::ConnectRealtime
+            Operation::CreateVideo
+                | Operation::WebSearch
+                | Operation::ConnectRealtime
+                | Operation::ConnectLive
         )
 }
 
@@ -239,14 +241,6 @@ fn wire_text(operation: OperationKey, body: &[u8], out: &mut Text) -> Option<()>
                 out,
             );
         }
-        (Dialect::OpenAi, GuardianReview | GuardianClassify) => {
-            let b: openai::guardian::GuardianRequestBody = parse(body)?;
-            out.push(&b.instructions);
-            b.input.iter().for_each(|item| client_item(item, out));
-            if let Some(Some(tools)) = &b.tools {
-                out.push_json(tools);
-            }
-        }
         (Dialect::OpenAi, CompactContent) => {
             // Native compaction carries the client's Responses-item history;
             // the server-shaped body is what a Responses upstream accepts.
@@ -288,6 +282,68 @@ fn wire_text(operation: OperationKey, body: &[u8], out: &mut Text) -> Option<()>
         (Dialect::OpenAiChat, GenerateContent | StreamGenerateContent) => {
             let b: openai::chat::GenerateContentRequestBody = parse(body)?;
             chat_request(&b, out);
+        }
+        (Dialect::GeminiInteractions, GenerateContent | StreamGenerateContent) => {
+            use gemini::interactions::{
+                CreateInteractionRequestBody, InteractionContent, InteractionInput,
+                InteractionInputItem,
+            };
+            let b: CreateInteractionRequestBody = parse(body)?;
+            // Stored context and agent internals are unavailable to local counting.
+            if b.previous_interaction_id.is_some()
+                || b.continuation_token.is_some()
+                || b.agent.is_some()
+                || b.background == Some(true)
+            {
+                return None;
+            }
+            b.system_instruction
+                .as_ref()
+                .iter()
+                .for_each(|s| out.push(s));
+            let content = |value: &InteractionContent, out: &mut Text| {
+                if let InteractionContent::Text(value) = value {
+                    out.push(&value.text);
+                }
+            };
+            match b.input.as_ref() {
+                Some(InteractionInput::Text(text)) => out.push(text),
+                Some(InteractionInput::Content(value)) => content(value, out),
+                Some(InteractionInput::Items(items)) => {
+                    for item in items {
+                        match item {
+                            InteractionInputItem::Content(value) => content(value, out),
+                            InteractionInputItem::Step(step) => {
+                                let step = step.body();
+                                for value in step.content.iter().chain(&step.summary) {
+                                    content(value, out);
+                                }
+                                if let Some(name) = &step.name {
+                                    out.push(name);
+                                }
+                                if let Some(value) = &step.arguments {
+                                    out.push_json(value);
+                                }
+                                if let Some(value) = &step.result {
+                                    out.push_json(value);
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {}
+            }
+            for tool in &b.tools {
+                if let Some(name) = &tool.name {
+                    out.push(name);
+                }
+                if let Some(description) = &tool.description {
+                    out.push(description);
+                }
+                if let Some(parameters) = &tool.parameters {
+                    out.push_json(parameters);
+                }
+            }
         }
         (Dialect::Gemini, GenerateContent | StreamGenerateContent) => {
             let b: gemini::GenerateContentRequestBody = parse(body)?;
@@ -348,6 +404,7 @@ fn claude_request(
     }
     for message in messages {
         match &message.content {
+            MessageContent::Absent => {}
             MessageContent::Text(text) => out.push(text),
             MessageContent::Blocks(blocks) => blocks.iter().for_each(|b| claude_block(b, out)),
         }
@@ -629,10 +686,10 @@ fn responses_input_contents(parts: &[openai::responses::InputContent], out: &mut
     }
 }
 
-// ---- OpenAI client-shaped items (guardian, native compaction) -------------
+// ---- OpenAI client-shaped items (native compaction) -------------
 
-fn client_item(item: &openai::guardian::ClientResponseItem, out: &mut Text) {
-    use openai::guardian::{
+fn client_item(item: &openai::codex::ClientResponseItem, out: &mut Text) {
+    use openai::codex::{
         AgentMessageInputContent, ClientResponseItem, ContentItem, FunctionCallOutputBody,
         FunctionCallOutputContentItem, LocalShellAction, ReasoningItemContent,
         ReasoningItemReasoningSummary, WebSearchAction,
@@ -906,7 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn client_shaped_items_cover_guardian_compaction_and_memory() {
+    fn client_shaped_items_cover_compaction_and_memory() {
         let body = format!(
             r#"{{"model":"m","instructions":"review this","input":[
               {{"type":"message","role":"user","content":[
@@ -920,11 +977,7 @@ mod tests {
         );
         let expected =
             "review this\nhi there\nf\n{\"a\":1}\nresult\n[{\"name\":\"f\",\"type\":\"function\"}]";
-        for operation in [Operation::GuardianReview, Operation::GuardianClassify] {
-            let text = request_text(key(operation, Dialect::OpenAi), body.as_bytes()).unwrap();
-            assert_eq!(text, expected);
-            assert!(!text.contains(BASE64));
-        }
+
         assert_eq!(
             request_text(
                 key(Operation::CompactContent, Dialect::OpenAi),
@@ -1029,20 +1082,16 @@ mod tests {
             ),
             None
         );
-        // The output side is still estimated from the response bytes.
-        let usage = Estimator::default()
-            .complete(
-                key(Operation::Rerank, Dialect::OpenAi),
-                "p",
-                Some("gpt-4o"),
-                Some(br#"{"query":"cats"}"#),
-                10,
-                None,
-            )
-            .unwrap();
-        assert_eq!(usage.tokens.input_tokens, None);
-        assert_eq!(usage.tokens.output_tokens, Some(5));
-        assert_eq!(usage.completeness, UsageCompleteness::Partial);
+        // Without recognized input or generated content, nothing is estimated.
+        let usage = Estimator::default().complete(
+            key(Operation::Rerank, Dialect::OpenAi),
+            "p",
+            Some("gpt-4o"),
+            Some(br#"{"query":"cats"}"#),
+            0,
+            None,
+        );
+        assert!(usage.is_none());
     }
 
     #[test]

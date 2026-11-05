@@ -66,8 +66,7 @@ pub fn select_rules(
 
 fn applies(rule: &RewriteRuleData, phase: Phase, context: &RewriteContext<'_>) -> bool {
     if let Some(dialect) = rule.action.dialect()
-        && (context.operation.dialect != dialect
-            || context.operation.operation != gproxy_protocol::Operation::GenerateContent)
+        && context.operation.dialect != dialect
     {
         return false;
     }

@@ -1,5 +1,5 @@
 //! Preserve v3's account-scoped runtime headers without overriding v4's
-//! captured CLI envelope grammar. Account-pinned sessions are opt-in; the
+//! captured hub envelope grammar. Account-pinned sessions are opt-in; the
 //! default still honors the caller/conversation session.
 use http::{HeaderMap, HeaderValue};
 use sha2::{Digest, Sha256};
@@ -62,10 +62,10 @@ pub(super) fn apply(
         )
     };
     let session = identifier(&session_seed);
-    let version = super::CLI_USER_AGENT
-        .strip_prefix("antigravity/cli/")
+    let version = super::USER_AGENT
+        .strip_prefix("antigravity/hub/")
         .and_then(|s| s.split_ascii_whitespace().next())
-        .unwrap_or("1.2.16");
+        .unwrap_or("2.28.1");
     for (name, value) in [
         ("x-client-name", "antigravity"),
         ("x-client-version", version),

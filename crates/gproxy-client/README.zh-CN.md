@@ -35,13 +35,13 @@ crate 组织：
 
 | feature | 传输 | body | WebSocket |
 |---|---|---|---|
-| `fetch` | 经 web-sys 调用 JS 宿主的全局 `fetch`（Cloudflare Workers、Deno、Netlify Edge、浏览器） | 双向流式（`duplex: half`） | 需要 `workers` 或宿主 client |
+| `fetch` | 经 web-sys 调用 JS 宿主的全局 `fetch`（Cloudflare Workers、Netlify Edge、浏览器） | 双向流式（`duplex: half`） | 需要 `workers` 或宿主 client |
 | `workers`（隐含 `fetch`） | 同上，加 Cloudflare Workers 升级：带 `Upgrade: websocket` 的 `fetch`，取 `response.webSocket` 后 `accept()` 暴露为协议 socket | 流式 | 支持，且带上游鉴权头 |
 | `reqwest`（默认） | reqwest 自带的 Fetch 兜底 | 请求体先缓冲 | 不支持 |
 
 同时启用时 `fetch` 优先。profile 仍用于选择 client，但代理、TLS 指纹和连接池
 是原生概念，这里忽略，由 JS 宿主决定。宿主自己有传输时（Workers 的 `Fetch` 带 service
-binding 与 `cf` 选项、Deno 的 `createHttpClient` 带代理或 CA、其他目标上的 `wasi:http`
+binding 与 `cf` 选项、其他目标上的 `wasi:http`
 封装）实现 `OutboundClient`，用 `ClientPool::with_client` 或按 profile 的
 `ClientPool::with_factory` 注入，core 就不会碰内置传输。`wasm32-wasip2` 没有 JS `fetch`，
 不在这些 feature 覆盖范围内。
@@ -68,7 +68,7 @@ RFC 6455 WS／WSS 使用 `pool.get_websocket(&config).await?` 获取句柄。保
 
 ## 配置选择
 
-store 保存具名的 `ConnectionProfile`；宿主按凭证 → Provider 顺序选择第一个非空
+store 保存具名的 `ConnectionProfile`；宿主按凭证 → 供应商顺序选择第一个非空
 `connection_profile_id`，都没有时用渠道自带的 `default_connection()`，再退到全局
 默认 profile，加载整份配置，再构造 `ConnectionConfig`。
 全部未选时使用默认 reqwest／直连；引用的记录不存在时报错，不回退。

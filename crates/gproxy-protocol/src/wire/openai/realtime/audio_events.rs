@@ -6,10 +6,11 @@ use super::wire::present_nullable;
 use crate::Rest;
 use serde::{Deserialize, Serialize};
 
-/// Source: `openai/types/realtime/input_audio_buffer_cleared_event.py`, `InputAudioBufferClearedEvent`.
+// Source: `openai/types/realtime/input_audio_buffer_cleared_event.py`, `InputAudioBufferClearedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferClearedEvent {
     pub event_id: String,
     #[serde(rename = "type")]
@@ -18,10 +19,11 @@ pub struct InputAudioBufferClearedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/input_audio_buffer_committed_event.py`, `InputAudioBufferCommittedEvent`.
+// Source: `openai/types/realtime/input_audio_buffer_committed_event.py`, `InputAudioBufferCommittedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferCommittedEvent {
     pub event_id: String,
     pub item_id: String,
@@ -37,10 +39,11 @@ pub struct InputAudioBufferCommittedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/input_audio_buffer_dtmf_event_received_event.py`, `InputAudioBufferDtmfEventReceivedEvent`.
+// Source: `openai/types/realtime/input_audio_buffer_dtmf_event_received_event.py`, `InputAudioBufferDtmfEventReceivedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferDtmfEventReceivedEvent {
     pub event: String,
     pub received_at: i64,
@@ -50,10 +53,11 @@ pub struct InputAudioBufferDtmfEventReceivedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/input_audio_buffer_speech_started_event.py`, `InputAudioBufferSpeechStartedEvent`.
+// Source: `openai/types/realtime/input_audio_buffer_speech_started_event.py`, `InputAudioBufferSpeechStartedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferSpeechStartedEvent {
     pub audio_start_ms: i64,
     pub event_id: String,
@@ -64,10 +68,11 @@ pub struct InputAudioBufferSpeechStartedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/input_audio_buffer_speech_stopped_event.py`, `InputAudioBufferSpeechStoppedEvent`.
+// Source: `openai/types/realtime/input_audio_buffer_speech_stopped_event.py`, `InputAudioBufferSpeechStoppedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferSpeechStoppedEvent {
     pub audio_end_ms: i64,
     pub event_id: String,
@@ -78,10 +83,11 @@ pub struct InputAudioBufferSpeechStoppedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_audio_delta_event.py`, `ResponseAudioDeltaEvent`.
+// Source: `openai/types/realtime/response_audio_delta_event.py`, `ResponseAudioDeltaEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseAudioDeltaEvent {
     pub content_index: i64,
     pub delta: String,
@@ -95,10 +101,11 @@ pub struct ResponseAudioDeltaEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_audio_done_event.py`, `ResponseAudioDoneEvent`.
+// Source: `openai/types/realtime/response_audio_done_event.py`, `ResponseAudioDoneEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseAudioDoneEvent {
     pub content_index: i64,
     pub event_id: String,
@@ -111,10 +118,11 @@ pub struct ResponseAudioDoneEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_audio_transcript_delta_event.py`, `ResponseAudioTranscriptDeltaEvent`.
+// Source: `openai/types/realtime/response_audio_transcript_delta_event.py`, `ResponseAudioTranscriptDeltaEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseAudioTranscriptDeltaEvent {
     pub content_index: i64,
     pub delta: String,
@@ -128,10 +136,11 @@ pub struct ResponseAudioTranscriptDeltaEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_audio_transcript_done_event.py`, `ResponseAudioTranscriptDoneEvent`.
+// Source: `openai/types/realtime/response_audio_transcript_done_event.py`, `ResponseAudioTranscriptDoneEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseAudioTranscriptDoneEvent {
     pub content_index: i64,
     pub event_id: String,
@@ -145,10 +154,11 @@ pub struct ResponseAudioTranscriptDoneEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/input_audio_buffer_timeout_triggered.py`, `InputAudioBufferTimeoutTriggered`.
+// Source: `openai/types/realtime/input_audio_buffer_timeout_triggered.py`, `InputAudioBufferTimeoutTriggered`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferTimeoutTriggered {
     pub audio_end_ms: i64,
     pub audio_start_ms: i64,
@@ -163,6 +173,7 @@ pub struct InputAudioBufferTimeoutTriggered {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferClearedEventType {
     #[serde(rename = "input_audio_buffer.cleared")]
     InputAudioBufferCleared,
@@ -171,6 +182,7 @@ pub enum InputAudioBufferClearedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferCommittedEventType {
     #[serde(rename = "input_audio_buffer.committed")]
     InputAudioBufferCommitted,
@@ -179,6 +191,7 @@ pub enum InputAudioBufferCommittedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferDtmfEventReceivedEventType {
     #[serde(rename = "input_audio_buffer.dtmf_event_received")]
     InputAudioBufferDtmfEventReceived,
@@ -187,6 +200,7 @@ pub enum InputAudioBufferDtmfEventReceivedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferSpeechStartedEventType {
     #[serde(rename = "input_audio_buffer.speech_started")]
     InputAudioBufferSpeechStarted,
@@ -195,6 +209,7 @@ pub enum InputAudioBufferSpeechStartedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferSpeechStoppedEventType {
     #[serde(rename = "input_audio_buffer.speech_stopped")]
     InputAudioBufferSpeechStopped,
@@ -203,6 +218,7 @@ pub enum InputAudioBufferSpeechStoppedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseAudioDeltaEventType {
     #[serde(rename = "response.output_audio.delta")]
     ResponseOutputAudioDelta,
@@ -211,6 +227,7 @@ pub enum ResponseAudioDeltaEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseAudioDoneEventType {
     #[serde(rename = "response.output_audio.done")]
     ResponseOutputAudioDone,
@@ -219,6 +236,7 @@ pub enum ResponseAudioDoneEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseAudioTranscriptDeltaEventType {
     #[serde(rename = "response.output_audio_transcript.delta")]
     ResponseOutputAudioTranscriptDelta,
@@ -227,6 +245,7 @@ pub enum ResponseAudioTranscriptDeltaEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseAudioTranscriptDoneEventType {
     #[serde(rename = "response.output_audio_transcript.done")]
     ResponseOutputAudioTranscriptDone,
@@ -235,6 +254,7 @@ pub enum ResponseAudioTranscriptDoneEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferTimeoutTriggeredType {
     #[serde(rename = "input_audio_buffer.timeout_triggered")]
     InputAudioBufferTimeoutTriggered,

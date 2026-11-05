@@ -31,6 +31,9 @@ pub(super) fn base_urls(provider: ProviderView<'_>) -> (String, String) {
 pub(super) struct Account<'a> {
     pub(super) access_token: &'a str,
     pub(super) account_id: Option<String>,
+    /// The id token's `chatgpt_account_is_fedramp` claim: the CLI then sends
+    /// `X-OpenAI-Fedramp: true` (model-provider/src/auth.rs).
+    pub(super) fedramp: bool,
 }
 
 pub(super) fn account<'a>(credential: &CredentialView<'a>) -> Result<Account<'a>, ChannelError> {
@@ -50,9 +53,20 @@ pub(super) fn account<'a>(credential: &CredentialView<'a>) -> Result<Account<'a>
         })
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let fedramp = credential
+        .metadata
+        .get("chatgpt_account_is_fedramp")
+        .or_else(|| {
+            credential
+                .secret
+                .pointer("/provider_fields/chatgpt_account_is_fedramp")
+        })
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(Account {
         access_token,
         account_id,
+        fedramp,
     })
 }
 
@@ -110,16 +124,6 @@ pub(super) fn backend_headers(
         None => HeaderMap::new(),
     };
     headers.insert(
-        header::AUTHORIZATION,
-        header_value(&format!("Bearer {}", account.access_token))?,
-    );
-    if let Some(id) = &account.account_id {
-        headers.insert(
-            HeaderName::from_static("chatgpt-account-id"),
-            header_value(id)?,
-        );
-    }
-    headers.insert(
         HeaderName::from_static("originator"),
         header_value(&config.originator)?,
     );
@@ -130,6 +134,26 @@ pub(super) fn backend_headers(
             HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| invalid_config(format!("header `{name}`")))?,
             HeaderValue::from_str(value).map_err(|_| invalid_config(format!("header `{name}`")))?,
+        );
+    }
+    // Authentication and account flags always come from the selected
+    // credential, after client and static headers have been applied.
+    headers.insert(
+        header::AUTHORIZATION,
+        header_value(&format!("Bearer {}", account.access_token))?,
+    );
+    headers.remove("chatgpt-account-id");
+    if let Some(id) = &account.account_id {
+        headers.insert(
+            HeaderName::from_static("chatgpt-account-id"),
+            header_value(id)?,
+        );
+    }
+    headers.remove("x-openai-fedramp");
+    if account.fedramp {
+        headers.insert(
+            HeaderName::from_static("x-openai-fedramp"),
+            HeaderValue::from_static("true"),
         );
     }
     Ok(headers)

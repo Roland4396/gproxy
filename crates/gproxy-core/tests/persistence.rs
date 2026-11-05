@@ -899,9 +899,20 @@ async fn structured_usage_preserves_cache_media_tools_and_unknowns_without_logs(
             input_tokens: Some(11),
             output_tokens: Some(19),
             cached_input_tokens: Some(23),
-            cache_creation_5m_tokens: Some(29),
-            cache_creation_30m_tokens: Some(31),
-            cache_creation_1h_tokens: Some(37),
+            cache_creation: vec![
+                gproxy_protocol::usage::CacheCreation {
+                    tokens: 29,
+                    ttl_seconds: Some(300),
+                },
+                gproxy_protocol::usage::CacheCreation {
+                    tokens: 31,
+                    ttl_seconds: None,
+                },
+                gproxy_protocol::usage::CacheCreation {
+                    tokens: 37,
+                    ttl_seconds: Some(43200),
+                },
+            ],
             reasoning_tokens: Some(7),
         },
         completeness: UsageCompleteness::Complete,
@@ -1010,12 +1021,8 @@ async fn structured_usage_preserves_cache_media_tools_and_unknowns_without_logs(
         (Some(11), Some(19), Some(23))
     );
     assert_eq!(
-        (
-            up.cache_creation_5m_tokens,
-            up.cache_creation_30m_tokens,
-            up.cache_creation_1h_tokens
-        ),
-        (Some(29), Some(31), Some(37))
+        up.cache_creation,
+        Some(serde_json::to_value(&upstream.tokens.cache_creation).unwrap())
     );
     assert_eq!(up.reasoning_tokens, Some(7));
     assert_eq!(up.audio_seconds.unwrap().to_string(), "1.25");
@@ -1032,7 +1039,9 @@ async fn stream_timing_is_persisted_without_capture() {
     let h = persistent().await;
     settings(&h, true, true, false, false).await;
     h.script(vec![(StatusCode::OK, vec![("content-type", "text/event-stream")], vec![
-        Bytes::from_static(b"event: response.created\ndata: {\"type\":\"response.created\"}\n\n"),
+        // The opening frames end at the first that is not preamble, which the
+        // attempt reads before answering; output starts with the next pull.
+        Bytes::from_static(b"event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\"}\n\n"),
         Bytes::from_static(b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"),
         Bytes::from_static(b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":5,\"output_tokens\":10}}}\n\n"),
     ])]);

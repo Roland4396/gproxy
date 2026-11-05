@@ -156,13 +156,13 @@ pub fn run() -> StartResult<()> {
             let data_dir = ohos_data_dir;
             #[cfg(not(target_env = "ohos"))]
             let data_dir = engine::data_dir(app.handle())?;
+            app.manage(fonts::FontConsole(std::sync::Arc::new(
+                gproxy_host_axum::console::Console::from_config(&Default::default())
+                    .with_font_cache(data_dir.join("fonts")),
+            )));
             let setup = setup::Setup::new(data_dir);
             app.manage(preferences::RuntimeStatus::default());
             let choices = setup.choices()?;
-            app.manage(fonts::FontConsole(std::sync::Arc::new(
-                gproxy_host_axum::console::Console::from_config(&Default::default())
-                    .with_font_cache(choices.data_dir.join("fonts")),
-            )));
             if choices.completed {
                 let desktop =
                     handle.block_on(engine::ensure_started(&choices.data_dir, store()))?;

@@ -138,7 +138,10 @@ async fn counted_requests_block_the_credential_when_the_window_fills() {
         .stream_generate_content(only(&h, "q1", "r3", 1), request("{}"))
         .await
         .unwrap_err();
-    assert!(matches!(error, CoreError::NoUsableCredential), "{error}");
+    assert!(
+        matches!(error, CoreError::NoUsableCredential { .. }),
+        "{error}"
+    );
     assert_eq!(h.client.seen.lines().len(), 2, "nothing was sent for r3");
 
     // With the whole provider allowed, the unlimited credential takes over.
@@ -184,7 +187,10 @@ async fn counted_tokens_are_charged_after_usage_settles() {
         .stream_generate_content(only(&h, "q1", "r3", 1), request("{}"))
         .await
         .unwrap_err();
-    assert!(matches!(error, CoreError::NoUsableCredential), "{error}");
+    assert!(
+        matches!(error, CoreError::NoUsableCredential { .. }),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -387,6 +393,7 @@ async fn quota_query_refreshes_expired_material_before_querying() {
         .credentials()
         .refresh_many(vec![
             gproxy_store::operations::credentials::CredentialRefresh {
+                metadata: None,
                 id: "a".into(),
                 expected_version: 0,
                 secret: gproxy_core::PlaintextCodec

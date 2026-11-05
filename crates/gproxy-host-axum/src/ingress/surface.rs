@@ -29,6 +29,12 @@ use gproxy_protocol::{Dialect, Operation, OperationKey};
 use http::{HeaderMap, Method};
 use serde_json::Value;
 
+#[cfg(feature = "documentation")]
+#[path = "surface_docs.rs"]
+mod documentation;
+#[cfg(feature = "documentation")]
+pub(crate) use documentation::openapi;
+
 /// One declared ingress path.
 struct Surface {
     method: Method,
@@ -92,6 +98,15 @@ surfaces! { table;
     POST "/v1beta/models/{model}:countTokens" => CountTokens / Gemini, model: "model";
     POST "/v1beta/models/{model}:embedContent" => CreateEmbedding / Gemini, model: "model";
     POST "/v1beta/models/{model}:batchEmbedContents" => BatchCreateEmbedding / Gemini, model: "model";
+    // Interactions keeps its native stateful lifecycle, for stable and beta.
+    POST "/v1beta/interactions" => GenerateContent / GeminiInteractions, stream: StreamGenerateContent;
+    GET "/v1beta/interactions/{id}" => RetrieveInteraction / GeminiInteractions;
+    POST "/v1beta/interactions/{id}/cancel" => CancelInteraction / GeminiInteractions;
+    DELETE "/v1beta/interactions/{id}" => DeleteInteraction / GeminiInteractions;
+    POST "/v1/interactions" => GenerateContent / GeminiInteractions, stream: StreamGenerateContent;
+    GET "/v1/interactions/{id}" => RetrieveInteraction / GeminiInteractions;
+    POST "/v1/interactions/{id}/cancel" => CancelInteraction / GeminiInteractions;
+    DELETE "/v1/interactions/{id}" => DeleteInteraction / GeminiInteractions;
     // ------------------------------------------------------------- models --
     // The OpenAI rows come first because they are the default when a client
     // supplied no evidence about which vendor it is.
@@ -104,6 +119,7 @@ surfaces! { table;
     // --------------------------------------------------------- everything --
     POST "/v1/embeddings" => CreateEmbedding / OpenAi;
     POST "/v1/moderations" => CreateModeration / OpenAi;
+    POST "/v1/decisions" => CreateDecision / OpenAi;
     POST "/v1/rerank" => Rerank / OpenAi;
     POST "/v1/conversations" => CreateConversation / OpenAi;
     POST "/v1/search" => WebSearch / OpenAi;
@@ -146,25 +162,28 @@ surfaces! { table;
     // the *call id*, in the path or in `?call_id=`, which core looks up to pin
     // the socket to the credential the offer was answered by.
     //
-    // The three upgrade paths are the three `RealtimeRoute`s that
-    // `Core::connect_realtime_path` accepts, so this table is that guard: a
-    // path it does not declare never reaches the engine, and a test checks the
-    // two agree.
+    // Standard Realtime, legacy Live and public GPT-Live have distinct routes.
+    // RealtimeRoute also parses their call IDs for scope/credential binding.
+    POST "/v1/audio/voices" => CreateVoice / OpenAi;
+    POST "/v1/realtime/client_secrets" => CreateRealtimeClientSecret / OpenAi;
+    POST "/v1/realtime/calls/{call_id}/hangup" => HangupRealtimeCall / OpenAi;
+    POST "/v1/live/sessions" => CreateLiveSession / OpenAi;
+    GET "/v1/live/sessions" => ConnectLive / OpenAi, upgrade: true;
+    GET "/v1/live/sessions/{session_id}/attach" => ConnectLive / OpenAi, upgrade: true;
+    POST "/v1/live/sessions/{session_id}/hangup" => HangupLiveSession / OpenAi;
     POST "/v1/realtime/calls" => CreateRealtimeCall / OpenAi;
     POST "/v1/live" => CreateRealtimeCall / OpenAi;
     GET "/v1/realtime" => ConnectRealtime / OpenAi, upgrade: true;
     GET "/v1/live" => ConnectRealtime / OpenAi, upgrade: true;
     GET "/v1/live/{call_id}" => ConnectRealtime / OpenAi, upgrade: true;
     GET "/v1/responses" => GenerateContent / OpenAiResponsesWebSocket, upgrade: true;
-    GET "/ws/v1beta/BidiGenerateContent" => ConnectRealtime / Gemini, upgrade: true;
+    GET "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent" => ConnectRealtime / Gemini, upgrade: true;
 }
 
 // These are Codex wire contracts, available only on a Codex provider mount.
 // Standard OpenAI operations remain in `table`, including on that mount.
 surfaces! { codex_table;
     POST "/v1/memories/trace_summarize" => SummarizeMemory / OpenAi;
-    POST "/v1/guardian" => GuardianReview / OpenAi;
-    POST "/v1/guardian-classifier" => GuardianClassify / OpenAi;
 }
 
 /// Codex's native backend URLs and our scoped `/v1` spelling resolve to the
@@ -286,9 +305,21 @@ fn wants_stream(body: Option<&Value>) -> bool {
 ///
 /// Three segment forms, which is all the declared surfaces need: a literal,
 /// `{name}` for exactly one non-empty segment, and `{name}:action` for
-/// Gemini's method suffix. No trailing-rest form: every surface here names its
-/// whole path, and a `{*rest}` would silently swallow a path nobody declared.
+/// Gemini's method suffix. Model parameters may span slashes; other parameters
+/// stay single-segment, and every surface still names its whole path.
 fn match_pattern(pattern: &'static str, path: &str) -> Option<Vec<(&'static str, String)>> {
+    // Model names can contain raw or percent-encoded slashes. Only model
+    // routes capture the remaining path; file ids and other parameters still
+    // match exactly one segment.
+    if let Some((prefix, tail)) = pattern.split_once("/models/") {
+        let (name, action) = parameter(tail)?;
+        let value = path.strip_prefix(prefix)?.strip_prefix("/models/")?;
+        let value = match action {
+            Some(action) => value.strip_suffix(action)?.strip_suffix(':')?,
+            None => value,
+        };
+        return (!value.is_empty()).then(|| vec![(name, decode(value))]);
+    }
     let mut captured = Vec::new();
     let mut segments = path.strip_prefix('/')?.split('/');
     for expected in pattern.strip_prefix('/')?.split('/') {
@@ -435,6 +466,28 @@ mod tests {
                     operation: Operation::WebSearch,
                     dialect: Dialect::OpenAi
                 }
+            );
+        }
+    }
+
+    #[test]
+    fn codex_continuation_aliases_select_the_bound_call_on_the_canonical_path() {
+        for path in [
+            "/backend-api/codex/live/rtc_test",
+            "/api/codex/live/rtc_test",
+            "/codex/live/rtc_test",
+        ] {
+            let matched = match_codex_path(&Method::GET, path, &HeaderMap::new(), None).unwrap();
+            assert_eq!(matched.operation.operation, Operation::ConnectRealtime);
+            assert_eq!(
+                gproxy_core::realtime::connect::model(
+                    matched.operation,
+                    &codex_path(path),
+                    None,
+                    None
+                )
+                .unwrap(),
+                None
             );
         }
     }

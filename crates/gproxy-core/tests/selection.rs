@@ -6,10 +6,7 @@ use gproxy_channel::channel::{
     QuotaAllowance, QuotaEntry, QuotaScope, QuotaSnapshot, QuotaSubject, QuotaValue,
 };
 use gproxy_core::{RequestContext, keys};
-use gproxy_store::entity::{
-    config::setting,
-    upstream::{credential, provider},
-};
+use gproxy_store::entity::{config::setting, upstream::credential};
 use http::StatusCode;
 use sea_orm::Set;
 use serde_json::json;
@@ -22,22 +19,8 @@ fn now() -> i64 {
         .as_millis() as i64
 }
 
-async fn configured(strategy: &str, affinity: Option<bool>) -> Harness {
+async fn configured(strategy: &str) -> Harness {
     let h = harness(full(), strategy).await;
-    let mut config = json!({"credential_strategy": strategy});
-    if let Some(value) = affinity {
-        config["session_affinity"] = json!(value);
-    }
-    h.core
-        .store()
-        .providers()
-        .update_many(vec![provider::ActiveModel {
-            id: Set("p".into()),
-            config: Set(config),
-            ..Default::default()
-        }])
-        .await
-        .unwrap();
     for id in ["a", "b"] {
         h.core
             .store()
@@ -149,7 +132,7 @@ async fn bind_models(h: &Harness, bindings: serde_json::Value) {
 
 #[tokio::test]
 async fn model_binding_is_exact_and_unconfigured_models_keep_their_pool() {
-    let h = configured("round_robin", Some(false)).await;
+    let h = configured("round_robin").await;
     bind_models(&h, json!({"gpt-x": ["b"]})).await;
     for _ in 0..3 {
         assert_eq!(run(&h, None, None).await, "b");
@@ -165,20 +148,22 @@ async fn model_binding_is_exact_and_unconfigured_models_keep_their_pool() {
 
 #[tokio::test]
 async fn model_binding_overrides_an_old_affinity_pin_and_reset_preference() {
-    let h = configured("earliest_reset", Some(true)).await;
-    let time = now();
-    observe(&h, "a", &[("5h", Some(time + 300_000), 10)]).await;
-    observe(&h, "b", &[("5h", Some(time + 600_000), 10)]).await;
-    assert_eq!(run(&h, Some("same-session"), None).await, "a");
-    bind_models(&h, json!({"gpt-x": ["b"]})).await;
-    assert_eq!(run(&h, Some("same-session"), None).await, "b");
+    for strategy in ["earliest_reset", "round_robin_affinity"] {
+        let h = configured(strategy).await;
+        let time = now();
+        observe(&h, "a", &[("5h", Some(time + 300_000), 10)]).await;
+        observe(&h, "b", &[("5h", Some(time + 600_000), 10)]).await;
+        assert_eq!(run(&h, Some("same-session"), None).await, "a");
+        bind_models(&h, json!({"gpt-x": ["b"]})).await;
+        assert_eq!(run(&h, Some("same-session"), None).await, "b");
+    }
 }
 
 #[tokio::test]
 async fn model_binding_never_widens_admission_and_unavailable_targets_fail_closed() {
     use gproxy_core::CoreError;
     for mode in ["not-admitted", "disabled", "blocked", "missing", "empty"] {
-        let h = configured("round_robin", Some(true)).await;
+        let h = configured("round_robin").await;
         let bindings = match mode {
             "missing" => json!({"gpt-x": ["not-present"]}),
             "empty" => json!({"gpt-x": []}),
@@ -207,7 +192,7 @@ async fn model_binding_never_widens_admission_and_unavailable_targets_fail_close
             .await
             .unwrap_err();
         assert!(
-            matches!(error, CoreError::NoUsableCredential),
+            matches!(error, CoreError::NoUsableCredential { .. }),
             "{mode}: {error}"
         );
         assert!(
@@ -224,7 +209,7 @@ async fn model_binding_does_not_retry_another_account_after_failure() {
         (StatusCode::SERVICE_UNAVAILABLE, 3),
         (StatusCode::TOO_MANY_REQUESTS, 1),
     ] {
-        let h = configured("round_robin", Some(false)).await;
+        let h = configured("round_robin").await;
         bind_models(&h, json!({"gpt-x": ["b"]})).await;
         // Preserve existing retry semantics: 503 is retried on the same
         // credential until its failure threshold; 429 blocks immediately.
@@ -252,14 +237,17 @@ async fn model_binding_does_not_retry_another_account_after_failure() {
             .stream_generate_content(h.context("blocked", 3, None), request("{}"))
             .await
             .unwrap_err();
-        assert!(matches!(error, CoreError::NoUsableCredential), "{error}");
+        assert!(
+            matches!(error, CoreError::NoUsableCredential { .. }),
+            "{error}"
+        );
         assert_eq!(h.client.seen.lines().len(), expected_calls);
     }
 }
 
 #[tokio::test]
 async fn earliest_reset_compares_actual_times_across_windows_and_stays_in_allowed_pool() {
-    let h = configured("earliest_reset", Some(false)).await;
+    let h = configured("earliest_reset").await;
     let time = now();
     observe(
         &h,
@@ -280,20 +268,20 @@ async fn earliest_reset_compares_actual_times_across_windows_and_stays_in_allowe
 }
 
 #[tokio::test]
-async fn a_valid_pin_wins_over_new_reset_order_and_new_sessions_use_the_new_order() {
-    let h = configured("earliest_reset", Some(true)).await;
+async fn earliest_reset_reconsiders_the_order_even_in_the_same_session() {
+    let h = configured("earliest_reset").await;
     let time = now();
     observe(&h, "a", &[("5h", Some(time + 3_600_000), 10)]).await;
     observe(&h, "b", &[("5h", Some(time + 600_000), 10)]).await;
     assert_eq!(run(&h, Some("s"), None).await, "b");
     observe(&h, "a", &[("1w", Some(time + 300_000), 10)]).await;
-    assert_eq!(run(&h, Some("s"), None).await, "b");
+    assert_eq!(run(&h, Some("s"), None).await, "a");
     assert_eq!(run(&h, Some("new"), None).await, "a");
 }
 
 #[tokio::test]
 async fn tied_and_unknown_resets_rotate_and_expired_observations_do_not_win() {
-    let h = configured("earliest_reset", None).await;
+    let h = configured("earliest_reset").await;
     assert_eq!(run(&h, None, None).await, "a");
     assert_eq!(run(&h, None, None).await, "b");
     let time = now();
@@ -307,7 +295,7 @@ async fn tied_and_unknown_resets_rotate_and_expired_observations_do_not_win() {
 
 #[tokio::test]
 async fn newer_unknown_reset_does_not_resurrect_an_old_reading() {
-    let h = configured("earliest_reset", None).await;
+    let h = configured("earliest_reset").await;
     let time = now();
     observe(&h, "a", &[("5h", Some(time + 300_000), 10)]).await;
     observe(&h, "b", &[("5h", Some(time + 600_000), 10)]).await;
@@ -326,25 +314,67 @@ async fn newer_unknown_reset_does_not_resurrect_an_old_reading() {
 }
 
 #[tokio::test]
-async fn independent_affinity_switch_overrides_legacy_defaults() {
+async fn sticky_is_deterministic_while_round_robin_affinity_follows_arrival_order() {
     for strategy in ["sticky", "round_robin_affinity"] {
-        let h = configured(strategy, None).await;
-        assert_eq!(run(&h, Some("s"), None).await, "a");
-        assert_eq!(run(&h, Some("s"), None).await, "a");
-        let h = configured(strategy, Some(false)).await;
-        assert_eq!(run(&h, Some("s"), None).await, "a");
-        assert_eq!(run(&h, Some("s"), None).await, "b");
+        let h = harness(full(), strategy).await;
+        let first = run(&h, Some("session-a"), None).await;
+        let second = run(&h, Some("session-b"), None).await;
+        assert_ne!(first, second);
+        assert_eq!(run(&h, Some("session-a"), None).await, first);
+        assert_eq!(run(&h, Some("session-b"), None).await, second);
+
+        // A fresh cache and reversed arrival order must not change sticky's map.
+        let fresh = harness(full(), strategy).await;
+        let other_second = run(&fresh, Some("session-b"), None).await;
+        let other_first = run(&fresh, Some("session-a"), None).await;
+        if strategy == "sticky" {
+            assert_eq!((other_first, other_second), (first.clone(), second));
+        } else {
+            assert_eq!((&first[..], &second[..]), ("a", "b"));
+            assert_eq!((&other_second[..], &other_first[..]), ("a", "b"));
+        }
+        let mut reversed = (*h.context("reversed", 2, Some("session-a"))).clone();
+        reversed.target.credentials.reverse();
+        assert_eq!(run_context(&h, reversed).await, first);
+
+        // Both respect admission; only round-robin affinity remembers a reassignment.
+        let replacement = if first == "a" { "b" } else { "a" };
+        assert_eq!(
+            run(&h, Some("session-a"), Some(replacement)).await,
+            replacement
+        );
+        assert_eq!(
+            run(&h, Some("session-a"), None).await,
+            if strategy == "sticky" {
+                first.as_str()
+            } else {
+                replacement
+            }
+        );
     }
-    let h = configured("round_robin", Some(true)).await;
+}
+
+#[tokio::test]
+async fn affinity_strategies_rotate_without_a_stable_session() {
+    for strategy in ["sticky", "round_robin_affinity"] {
+        let h = harness(full(), strategy).await;
+        assert_eq!(run(&h, None, None).await, "a");
+        assert_eq!(run(&h, None, None).await, "b");
+        let mut context = (*h.context("fallback", 2, Some("same-request-id"))).clone();
+        context.session.as_mut().unwrap().source = gproxy_core::SessionSource::RequestFallback;
+        assert_eq!(run_context(&h, context.clone()).await, "a");
+        assert_eq!(run_context(&h, context).await, "b");
+    }
+    let h = harness(full(), "round_robin").await;
     assert_eq!(run(&h, Some("s"), None).await, "a");
-    assert_eq!(run(&h, Some("s"), None).await, "a");
+    assert_eq!(run(&h, Some("s"), None).await, "b");
 }
 
 #[tokio::test]
 async fn reset_order_respects_dimension_model_and_operation_scopes() {
     use gproxy_channel::channel::QuotaWindow;
     use gproxy_protocol::Operation;
-    let h = configured("earliest_reset", None).await;
+    let h = configured("earliest_reset").await;
     let time = now();
     observe(&h, "a", &[("5h", Some(time + 300_000), 10)]).await;
     observe(&h, "b", &[("5h", Some(time + 600_000), 10)]).await;

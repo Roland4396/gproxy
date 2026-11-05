@@ -5,6 +5,7 @@ use super::{
         openai_tools_to_claude,
     },
 };
+use crate::transform::generate::prompt_cache as cache;
 use crate::wire::claude::count_tokens as cc;
 use crate::{
     Rest,
@@ -20,21 +21,29 @@ pub fn claude_to_openai(
     let mut report = Report::default();
     let mut projected = input.clone();
     super::super::claude_controls::project(&mut projected, &mut report);
+    let explicit_cache = cache::prepare_claude(&mut projected, &mut report);
     let input = &projected;
     super::requirements::claude(input, &mut report)?;
     let mut messages = Vec::new();
     if let Some(system) = &input.system {
-        let text = match system {
-            cc::SystemPrompt::Text(text) => text.clone(),
-            cc::SystemPrompt::Blocks(blocks) => blocks
-                .iter()
-                .map(|block| block.text.clone())
-                .collect::<Vec<_>>()
-                .join("\n"),
+        let content = match system {
+            cc::SystemPrompt::Text(text) => chat::TextContent::Text(text.clone()),
+            cc::SystemPrompt::Blocks(blocks)
+                if blocks.iter().any(|block| block.cache_control.is_some()) =>
+            {
+                chat::TextContent::Parts(blocks.iter().map(cache::chat_text).collect())
+            }
+            cc::SystemPrompt::Blocks(blocks) => chat::TextContent::Text(
+                blocks
+                    .iter()
+                    .map(|block| block.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
         };
         messages.push(chat::ChatMessage::System(chat::SystemMessage {
             role: chat::SystemRole::System,
-            content: chat::TextContent::Text(text),
+            content,
             name: None,
             rest: Rest::new(),
         }));
@@ -126,7 +135,11 @@ pub fn claude_to_openai(
             prediction: None,
             presence_penalty: None,
             prompt_cache_key: None,
-            prompt_cache_options: None,
+            prompt_cache_options: explicit_cache.then(|| {
+                chat::PromptCacheOptions::builder()
+                    .mode(chat::PromptCacheOptionMode::Explicit)
+                    .build()
+            }),
             prompt_cache_retention: None,
             reasoning_effort,
             response_format,
@@ -146,15 +159,16 @@ pub fn claude_to_openai(
             store: None,
             stream: input.stream.map(Some),
             stream_options: None,
-            temperature: input.temperature.map(Some),
+            temperature: None,
             tool_choice,
             tools: claude_tools_to_openai(input.tools.as_ref(), &mut report)?,
             top_logprobs: None,
-            top_p: input.top_p.map(Some),
+            top_p: None,
             user: input
                 .metadata
                 .as_ref()
-                .and_then(|metadata| metadata.user_id.clone()),
+                .and_then(|metadata| metadata.user_id.clone())
+                .map(Some),
             verbosity: None,
             web_search_options: None,
             rest: Rest::new(),
@@ -185,10 +199,10 @@ pub fn openai_to_claude(
         ));
         match message {
             chat::ChatMessage::System(message) if leading => {
-                system.push(super::content::chat_text(&message.content))
+                system.extend(super::content::chat_text_blocks(&message.content))
             }
             chat::ChatMessage::Developer(message) if leading => {
-                system.push(super::content::chat_text(&message.content))
+                system.extend(super::content::chat_text_blocks(&message.content))
             }
             chat::ChatMessage::System(_)
             | chat::ChatMessage::Developer(_)
@@ -276,7 +290,10 @@ pub fn openai_to_claude(
             max_tokens,
             messages,
             model: target_model,
-            cache_control: None,
+            cache_control: match &input.prompt_cache_options {
+                Some(options) => cache::chat_options(options),
+                None => cache::key_implicit(input.prompt_cache_key.as_ref()),
+            },
             container: None,
             context_management: None,
             diagnostics: None,
@@ -284,7 +301,7 @@ pub fn openai_to_claude(
             fallbacks: None,
             inference_geo: None,
             mcp_servers: None,
-            metadata: input.user.as_ref().map(|user| {
+            metadata: input.user.as_ref().and_then(Option::as_ref).map(|user| {
                 let mut metadata = cg::Metadata::builder().build();
                 metadata.user_id = Some(user.clone());
                 metadata
@@ -314,8 +331,19 @@ pub fn openai_to_claude(
             speed: None,
             stop_sequences,
             stream: input.stream.flatten(),
-            system: (!system.is_empty()).then(|| cc::SystemPrompt::Text(system.join("\n"))),
-            temperature: input.temperature.flatten(),
+            system: (!system.is_empty()).then(|| {
+                if system.iter().any(|block| block.cache_control.is_some()) {
+                    cc::SystemPrompt::Blocks(system)
+                } else {
+                    cc::SystemPrompt::Text(
+                        system
+                            .into_iter()
+                            .map(|block| block.text)
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    )
+                }
+            }),
             thinking,
             tool_choice,
             tools: if let Some(functions) = input.functions.as_ref() {
@@ -323,15 +351,22 @@ pub fn openai_to_claude(
             } else {
                 openai_tools_to_claude(input.tools.as_ref())?
             },
-            top_k: None,
-            top_p: input.top_p.flatten(),
             rest: Rest::new(),
         },
         report,
     };
+    if input.prompt_cache_options.is_none() && converted.value.cache_control.is_some() {
+        converted.report.changed(
+            "prompt_cache_key",
+            "cache key mapped to Claude automatic cache_control",
+        );
+    }
     super::super::claude_controls::target(
+        &mut converted.value.messages,
         &converted.value.model,
+        Some(converted.value.max_tokens),
         &mut converted.value.thinking,
+        &mut converted.value.output_config,
         &mut converted.value.tool_choice,
         &mut converted.report,
     );

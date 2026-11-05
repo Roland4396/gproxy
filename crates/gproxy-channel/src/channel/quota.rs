@@ -65,6 +65,8 @@ pub enum QuotaSubject {
 pub enum QuotaResetBehavior {
     Periodic,
     Recovering,
+    /// The allowance expires at `period_end_ms`; it does not replenish.
+    Expiring,
     #[default]
     Unknown,
 }
@@ -215,6 +217,21 @@ pub trait QuotaModel: Send + Sync {
     /// permission takes effect immediately. Local budgets and upstream refusal
     /// cooldowns are never bypassed by this permission.
     fn allows_paid_usage(&self, _credential: CredentialView<'_>, _dimension: &str) -> bool {
+        false
+    }
+
+    /// Whether the channel configuration or request asks for a continuation mode
+    /// that can serve past a reported subscription window. This affects only
+    /// this selection; it never clears observations, bypasses local budgets,
+    /// or overrides failure/rate-limit cooldowns. The upstream remains the
+    /// authority on whether the requested mode is available.
+    fn allows_exhausted_request(
+        &self,
+        _provider: ProviderView<'_>,
+        _dimension: &str,
+        _operation: OperationKey,
+        _headers: &HeaderMap,
+    ) -> bool {
         false
     }
 

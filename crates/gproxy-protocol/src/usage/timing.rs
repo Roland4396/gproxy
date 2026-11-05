@@ -7,8 +7,18 @@ pub(super) fn has_output(name: Option<&str>, data: &str) -> bool {
 
 pub(super) fn value_has_output(name: Option<&str>, value: &Value) -> bool {
     let nonempty = |value: &Value| value.as_str().is_some_and(|text| !text.is_empty());
-    let kind = value["type"].as_str().or(name);
+    let kind = value["event_type"]
+        .as_str()
+        .or_else(|| value["type"].as_str())
+        .or(name);
     match kind {
+        Some("step.delta") => {
+            let delta = &value["delta"];
+            nonempty(&delta["text"])
+                || nonempty(&delta["arguments"])
+                || nonempty(&delta["content"]["text"])
+                || nonempty(&delta["data"])
+        }
         Some("content_block_delta") => {
             let delta = &value["delta"];
             nonempty(&delta["text"])
@@ -24,8 +34,11 @@ pub(super) fn value_has_output(name: Option<&str>, value: &Value) -> bool {
             | "response.reasoning_text.delta"
             | "response.reasoning_summary_text.delta"
             | "response.function_call_arguments.delta"
-            | "response.refusal.delta",
+            | "response.refusal.delta"
+            | "response.output_audio.delta"
+            | "session.output_transcript.delta",
         ) => nonempty(&value["delta"]),
+        Some("session.output_audio.delta") => nonempty(&value["audio"]),
         Some(_) => false,
         None => {
             let chat = value["choices"].as_array().is_some_and(|choices| {

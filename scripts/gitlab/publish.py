@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,7 +31,7 @@ def request(method, url, token, body=None, header="Authorization", missing=False
         raise RuntimeError(f"{method} {urllib.parse.urlsplit(url).path}: HTTP {error.code}") from None
 
 
-def git_push(url, ref, token, username, force=False, mirror=False):
+def git_push(url, ref, token, username, force=False, mirror=False, skip_ci=False):
     host = urllib.parse.urlsplit(url).netloc
     env = os.environ | {
         "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": "2",
@@ -42,6 +43,8 @@ def git_push(url, ref, token, username, force=False, mirror=False):
     if mirror:
         remote = subprocess.check_output(["git", "ls-remote", url, ref], env=env, text=True).split()
         options = [f"--force-with-lease={ref}:{remote[0] if remote else ''}"]
+    if skip_ci:
+        options += ["-o", "ci.skip"]
     subprocess.run(["git", "push", *options, url,
                     f"{os.environ['CI_COMMIT_SHA']}:{ref}"], env=env, check=True)
 
@@ -115,22 +118,49 @@ class Gitlab:
         return request(method, self.root + path, self.token, body, "PRIVATE-TOKEN", missing)
 
     def release(self, tag, notes, prerelease):
+        if tag == os.environ.get("CI_COMMIT_TAG"):
+            self.sync_version_tag(tag)
         release = self.api("GET", f"/releases/{tag}", missing=True)
         # GitLab has no draft releases. Upload all package files before making
         # a new release visible, then create it with all links in one request.
         return release or {"tag_name": tag, "pending": True, "assets": {"links": []}}
 
+    def sync_version_tag(self, tag):
+        # Pull mirrors may be delayed or stopped by a diverged branch. The
+        # release's source must be present before GitLab creates its release.
+        current = self.api("GET", "/repository/tags/" + urllib.parse.quote(tag, safe=""), missing=True)
+        if current:
+            if current["commit"]["id"] != os.environ["CI_COMMIT_SHA"]:
+                raise ValueError(f"GitLab version tag {tag} points at a different commit")
+            return
+        # Version tags are immutable; never force an existing tag or start a
+        # second build pipeline just to make the source available.
+        git_push(self.url, f"refs/tags/{tag}", self.token, "oauth2", skip_ci=True)
+
     def upload(self, release, path):
         # Release and beta manifests differ even within the same pipeline.
         version = f"{os.environ['CI_PIPELINE_ID']}-{release['tag_name']}"
         url = f"{self.root}/packages/generic/gproxy/{version}/{urllib.parse.quote(path.name)}"
-        with path.open("rb") as stream:
-            req = urllib.request.Request(url, method="PUT", data=stream, headers={
-                "PRIVATE-TOKEN": self.token, "Content-Type": "application/octet-stream",
-                "Content-Length": str(path.stat().st_size),
-            })
-            with urllib.request.urlopen(req, timeout=600) as response:
-                response.read()
+        for attempt in range(5):
+            try:
+                # Reopen the file so a retry sends the entire package again.
+                with path.open("rb") as stream:
+                    req = urllib.request.Request(url, method="PUT", data=stream, headers={
+                        "PRIVATE-TOKEN": self.token, "Content-Type": "application/octet-stream",
+                        "Content-Length": str(path.stat().st_size),
+                    })
+                    with urllib.request.urlopen(req, timeout=600) as response:
+                        response.read()
+                break
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+                if isinstance(error, urllib.error.HTTPError) and error.code not in {408, 429, 500, 502, 503, 504}:
+                    raise
+                if attempt == 4:
+                    raise
+                reason = f"HTTP {error.code}" if isinstance(error, urllib.error.HTTPError) else type(error).__name__
+                delay = 2 ** attempt
+                print(f"gitlab: retrying {path.name} after {reason} in {delay}s ({attempt + 1}/4)", flush=True)
+                time.sleep(delay)
         tag = urllib.parse.quote(release["tag_name"], safe="")
         link = next((a for a in release.get("assets", {}).get("links", []) if a["name"] == path.name), None)
         body = {"name": path.name, "url": url, "direct_asset_path": "/" + path.name, "link_type": "package"}
@@ -210,6 +240,8 @@ def verify_packages():
             if not (name := row.get("headless_artifact")):
                 continue
             expected += [name + ".zip", name + ".provenance.json"]
+            if row["os"] == "windows":
+                expected.append(name + ".msix")
             if row["target"].endswith("-linux-musl"):
                 expected.append(name + ".apk")
             with zipfile.ZipFile(directory / (name + ".zip")) as archive:
@@ -218,8 +250,8 @@ def verify_packages():
                     raise ValueError(f"Missing headless executable: {name}")
                 if row["os"] == "android" and "gproxy.bin" not in archive.namelist():
                     raise ValueError(f"Missing headless Android binary: {name}")
-    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GPROXY_BUILD_CHANNEL") == "release":
-        expected.append("gproxy-fdroid-aarch64.apk")
+    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GPROXY_BUILD_CHANNEL") in {"release", "dev"}:
+        expected.extend(["gproxy-fdroid-universal.apk", "gproxy-google-play-universal.aab"])
     extensions = {"linux": ".deb", "macos": ".dmg", "windows": ".msix", "android": ".apk", "ohos": ".hap"}
     for row in matrix:
         cli = row["artifact"]
@@ -230,7 +262,8 @@ def verify_packages():
             executable = "gproxy.exe" if row["os"] == "windows" else "gproxy"
             if executable not in archive.namelist() or any("gproxy-desktop" in n for n in archive.namelist()):
                 raise ValueError(f"Wrong executable in CLI archive: {cli}")
-        if row["os"] != "ohos":
+        # musl CLIs ship as Alpine APKs (checked above), not DEBs.
+        if row["os"] != "ohos" and not row["target"].endswith("-linux-musl"):
             cli_extension = ".deb" if row["os"] == "android" else extensions[row["os"]]
             expected.append(cli + cli_extension)
         if app := row.get("application_artifact"):
@@ -239,7 +272,6 @@ def verify_packages():
             if row.get("application_builder", row["builder"]) == "cargo-alpine" and os.environ.get("GITHUB_ACTIONS") != "true":
                 continue
             expected += [app + row.get("application_extension", extensions[row["os"]]), app + ".provenance.json"]
-            expected += [app + extension for extension in row.get("application_extra_extensions", [])]
             if row["os"] not in ("android", "ohos"):
                 expected.append(app + ".zip")
                 with zipfile.ZipFile(directory / (app + ".zip")) as archive:
@@ -272,7 +304,7 @@ def upload_assets(host, release, assets):
 
 
 def release_assets(directory):
-    extensions = {".zip", ".deb", ".dmg", ".msix", ".apk", ".hap", ".wasm"}
+    extensions = {".zip", ".deb", ".dmg", ".msix", ".apk", ".aab", ".hap", ".wasm"}
     assets = sorted(path for path in directory.iterdir()
                     if path.is_file() and path.suffix in extensions)
     checksums = directory / "SHA256SUMS"
@@ -298,7 +330,7 @@ def main():
         return
     hosts[2].sync()
     source_version = os.environ.get("GPROXY_SOURCE_VERSION", os.environ["GPROXY_BUILD_VERSION"])
-    notes = Path(f"docs/release-notes/v{source_version}.md").read_text()
+    notes = Path(f"release-notes/v{source_version}.md").read_text()
     builder = ("GitHub Actions" if os.environ.get("GITHUB_ACTIONS") == "true"
                else "CNB CI" if os.environ.get("CNB_BUILD_ID") else "GitLab CI")
     notes += f"\n\nBuilt once by [{builder}]({os.environ['CI_PIPELINE_URL']}). CLI (`gproxy-*`) and Application (`gproxy-tauri-*`) packages are separate.\n"

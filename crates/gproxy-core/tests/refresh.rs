@@ -27,6 +27,7 @@ async fn static_api_key(h: &Harness) {
         .store()
         .credentials()
         .refresh_many(vec![RefreshRow {
+            metadata: None,
             id: "a".into(),
             expected_version: 0,
             secret: gproxy_core::PlaintextCodec
@@ -63,7 +64,8 @@ async fn static_api_key_auth_errors_do_not_refresh_or_mark_dead() {
         assert_eq!(response.status, status);
         read(response.body).await;
         completion.await.unwrap();
-        assert_eq!(h.client.seen.lines().len(), 2);
+        // A refusal excludes the credential for the rest of the request.
+        assert_eq!(h.client.seen.lines().len(), 1);
         assert!(h.channel.refresh_calls.lock().unwrap().is_empty());
         assert_eq!(
             stored_version(&h, "a").await,
@@ -256,6 +258,7 @@ async fn if_needed_skips_fresh_material_and_a_peer_version_satisfies_it() {
         .store()
         .credentials()
         .refresh_many(vec![RefreshRow {
+            metadata: Some(json!({"plan": "peer"})),
             id: "b".into(),
             expected_version: 0,
             secret: gproxy_core::PlaintextCodec
@@ -275,6 +278,11 @@ async fn if_needed_skips_fresh_material_and_a_peer_version_satisfies_it() {
     assert_eq!(
         h.core.snapshot().credentials["b"].state.load().secret["api_key"],
         "kb-peer"
+    );
+
+    assert_eq!(
+        h.core.snapshot().credentials["b"].state.load().metadata["plan"],
+        "peer"
     );
 
     // Wrong provider is an invalid target, not a refresh.
@@ -416,6 +424,7 @@ async fn material_near_expiry_is_refreshed_before_the_attempt_pins_it() {
         .store()
         .credentials()
         .refresh_many(vec![RefreshRow {
+            metadata: None,
             id: "a".into(),
             expected_version: 0,
             secret: gproxy_core::PlaintextCodec

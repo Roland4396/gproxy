@@ -7,10 +7,11 @@ use super::{ConversationItem, RealtimeError, RealtimeResponse};
 use crate::Rest;
 use serde::{Deserialize, Serialize};
 
-/// Source: `openai/types/realtime/realtime_error_event.py`, `RealtimeErrorEvent`.
+// Source: `openai/types/realtime/realtime_error_event.py`, `RealtimeErrorEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeErrorEvent {
     pub error: RealtimeError,
     pub event_id: String,
@@ -20,10 +21,11 @@ pub struct RealtimeErrorEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/rate_limits_updated_event.py`, `RateLimitsUpdatedEvent`.
+// Source: `openai/types/realtime/rate_limits_updated_event.py`, `RateLimitsUpdatedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RateLimitsUpdatedEvent {
     pub event_id: String,
     pub rate_limits: Vec<RateLimitsUpdatedEventRateLimit>,
@@ -33,10 +35,11 @@ pub struct RateLimitsUpdatedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_content_part_added_event.py`, `ResponseContentPartAddedEvent`.
+// Source: `openai/types/realtime/response_content_part_added_event.py`, `ResponseContentPartAddedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseContentPartAddedEvent {
     pub content_index: i64,
     pub event_id: String,
@@ -50,10 +53,11 @@ pub struct ResponseContentPartAddedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_content_part_done_event.py`, `ResponseContentPartDoneEvent`.
+// Source: `openai/types/realtime/response_content_part_done_event.py`, `ResponseContentPartDoneEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseContentPartDoneEvent {
     pub content_index: i64,
     pub event_id: String,
@@ -67,10 +71,11 @@ pub struct ResponseContentPartDoneEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_created_event.py`, `ResponseCreatedEvent`.
+// Source: `openai/types/realtime/response_created_event.py`, `ResponseCreatedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseCreatedEvent {
     pub event_id: String,
     pub response: RealtimeResponse,
@@ -80,10 +85,11 @@ pub struct ResponseCreatedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_done_event.py`, `ResponseDoneEvent`.
+// Source: `openai/types/realtime/response_done_event.py`, `ResponseDoneEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseDoneEvent {
     pub event_id: String,
     pub response: RealtimeResponse,
@@ -93,10 +99,11 @@ pub struct ResponseDoneEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_function_call_arguments_delta_event.py`, `ResponseFunctionCallArgumentsDeltaEvent`.
+// Source: `openai/types/realtime/response_function_call_arguments_delta_event.py`, `ResponseFunctionCallArgumentsDeltaEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseFunctionCallArgumentsDeltaEvent {
     pub call_id: String,
     pub delta: String,
@@ -110,10 +117,11 @@ pub struct ResponseFunctionCallArgumentsDeltaEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_function_call_arguments_done_event.py`, `ResponseFunctionCallArgumentsDoneEvent`.
+// Source: `openai/types/realtime/response_function_call_arguments_done_event.py`, `ResponseFunctionCallArgumentsDoneEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseFunctionCallArgumentsDoneEvent {
     pub arguments: String,
     pub call_id: String,
@@ -128,10 +136,11 @@ pub struct ResponseFunctionCallArgumentsDoneEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_output_item_added_event.py`, `ResponseOutputItemAddedEvent`.
+// Source: `openai/types/realtime/response_output_item_added_event.py`, `ResponseOutputItemAddedEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseOutputItemAddedEvent {
     pub event_id: String,
     pub item: ConversationItem,
@@ -143,10 +152,11 @@ pub struct ResponseOutputItemAddedEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_output_item_done_event.py`, `ResponseOutputItemDoneEvent`.
+// Source: `openai/types/realtime/response_output_item_done_event.py`, `ResponseOutputItemDoneEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseOutputItemDoneEvent {
     pub event_id: String,
     pub item: ConversationItem,
@@ -158,10 +168,11 @@ pub struct ResponseOutputItemDoneEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_text_delta_event.py`, `ResponseTextDeltaEvent`.
+// Source: `openai/types/realtime/response_text_delta_event.py`, `ResponseTextDeltaEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseTextDeltaEvent {
     pub content_index: i64,
     pub delta: String,
@@ -175,10 +186,11 @@ pub struct ResponseTextDeltaEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_text_done_event.py`, `ResponseTextDoneEvent`.
+// Source: `openai/types/realtime/response_text_done_event.py`, `ResponseTextDoneEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseTextDoneEvent {
     pub content_index: i64,
     pub event_id: String,
@@ -192,10 +204,11 @@ pub struct ResponseTextDoneEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/rate_limits_updated_event.py`, `RateLimit`.
+// Source: `openai/types/realtime/rate_limits_updated_event.py`, `RateLimit`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RateLimitsUpdatedEventRateLimit {
     #[serde(
         default,
@@ -225,10 +238,11 @@ pub struct RateLimitsUpdatedEventRateLimit {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_content_part_added_event.py`, `Part`.
+// Source: `openai/types/realtime/response_content_part_added_event.py`, `Part`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseContentPartAddedEventPart {
     #[serde(
         default,
@@ -259,10 +273,11 @@ pub struct ResponseContentPartAddedEventPart {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_content_part_done_event.py`, `Part`.
+// Source: `openai/types/realtime/response_content_part_done_event.py`, `Part`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseContentPartDoneEventPart {
     #[serde(
         default,
@@ -296,6 +311,7 @@ pub struct ResponseContentPartDoneEventPart {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeErrorEventType {
     #[serde(rename = "error")]
     Error,
@@ -304,6 +320,7 @@ pub enum RealtimeErrorEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RateLimitsUpdatedEventType {
     #[serde(rename = "rate_limits.updated")]
     RateLimitsUpdated,
@@ -312,6 +329,7 @@ pub enum RateLimitsUpdatedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseContentPartAddedEventType {
     #[serde(rename = "response.content_part.added")]
     ResponseContentPartAdded,
@@ -320,6 +338,7 @@ pub enum ResponseContentPartAddedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseContentPartDoneEventType {
     #[serde(rename = "response.content_part.done")]
     ResponseContentPartDone,
@@ -328,6 +347,7 @@ pub enum ResponseContentPartDoneEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseCreatedEventType {
     #[serde(rename = "response.created")]
     ResponseCreated,
@@ -336,6 +356,7 @@ pub enum ResponseCreatedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseDoneEventType {
     #[serde(rename = "response.done")]
     ResponseDone,
@@ -344,6 +365,7 @@ pub enum ResponseDoneEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseFunctionCallArgumentsDeltaEventType {
     #[serde(rename = "response.function_call_arguments.delta")]
     ResponseFunctionCallArgumentsDelta,
@@ -352,6 +374,7 @@ pub enum ResponseFunctionCallArgumentsDeltaEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseFunctionCallArgumentsDoneEventType {
     #[serde(rename = "response.function_call_arguments.done")]
     ResponseFunctionCallArgumentsDone,
@@ -360,6 +383,7 @@ pub enum ResponseFunctionCallArgumentsDoneEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseOutputItemAddedEventType {
     #[serde(rename = "response.output_item.added")]
     ResponseOutputItemAdded,
@@ -368,6 +392,7 @@ pub enum ResponseOutputItemAddedEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseOutputItemDoneEventType {
     #[serde(rename = "response.output_item.done")]
     ResponseOutputItemDone,
@@ -376,6 +401,7 @@ pub enum ResponseOutputItemDoneEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseTextDeltaEventType {
     #[serde(rename = "response.output_text.delta")]
     ResponseOutputTextDelta,
@@ -384,6 +410,7 @@ pub enum ResponseTextDeltaEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseTextDoneEventType {
     #[serde(rename = "response.output_text.done")]
     ResponseOutputTextDone,
@@ -392,6 +419,7 @@ pub enum ResponseTextDoneEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RateLimitsUpdatedEventRateLimitName {
     #[serde(rename = "requests")]
     Requests,
@@ -402,6 +430,7 @@ pub enum RateLimitsUpdatedEventRateLimitName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseContentPartAddedEventPartType {
     #[serde(rename = "text")]
     Text,
@@ -412,6 +441,7 @@ pub enum ResponseContentPartAddedEventPartType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseContentPartDoneEventPartType {
     #[serde(rename = "text")]
     Text,

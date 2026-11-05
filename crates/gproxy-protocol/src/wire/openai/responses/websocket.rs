@@ -13,6 +13,7 @@ use super::{generate::GenerateContentRequestBody, stream::StreamEvent};
 #[derive(gproxy_protocol_macros::DeclaredFields)]
 // Preserve the established by-value response.create constructor.
 #[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ClientEvent {
     #[serde(rename = "response.inject")]
     ResponseInject(super::multi_agent::InjectRequest),
@@ -37,6 +38,7 @@ pub enum ClientEvent {
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 // Match the by-value event DTOs used by native generation streams.
 #[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ServerEvent {
     Interrupt(InterruptEvent),
     Injection(super::multi_agent::InjectionEvent),
@@ -53,6 +55,7 @@ pub enum ServerEvent {
     serde::Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InterruptRequest {
     pub response_id: String,
     pub mode: InterruptMode,
@@ -69,6 +72,7 @@ pub struct InterruptRequest {
     gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InterruptMode {
     DiscardPartialItems,
 }
@@ -83,6 +87,7 @@ pub enum InterruptMode {
     gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(tag = "type")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InterruptEvent {
     #[serde(rename = "response.interrupt.accepted")]
     Accepted {
@@ -110,6 +115,7 @@ pub type HandshakeResponse = crate::WireResponse<()>;
     serde::Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RequestMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_id: Option<String>,
@@ -126,6 +132,7 @@ pub struct RequestMessage {
     serde::Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ServerMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_id: Option<String>,
@@ -140,10 +147,12 @@ pub struct ServerMessage {
     serde::Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ErrorMessage {
     #[serde(rename = "type")]
     pub type_: ErrorMessageType,
-    pub status: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_id: Option<String>,
     pub error: ErrorDetail,
@@ -157,6 +166,7 @@ pub struct ErrorMessage {
     serde::Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ErrorMessageType {
     #[serde(rename = "error")]
     Error,
@@ -165,10 +175,12 @@ pub enum ErrorMessageType {
     Debug,
     Clone,
     PartialEq,
+    Eq,
     serde::Serialize,
     serde::Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ErrorDetail {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,

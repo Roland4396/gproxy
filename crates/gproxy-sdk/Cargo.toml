@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+schema = ["dep:schemars", "gproxy-core/schema", "gproxy-channel/schema"]
 # Everything in the default set compiles for wasm32-unknown-unknown.
 default = ["memory", "fs", "bundled-vocabulary"]
 
@@ -23,6 +24,7 @@ claudeweb = ["gproxy-channel/claudeweb", "gproxy-client/wreq"]
 cline = ["gproxy-channel/cline"]
 cloudflare_ai_gateway = ["gproxy-channel/cloudflare_ai_gateway"]
 codex = ["gproxy-channel/codex", "gproxy-client/reqwest-native"]
+commandcode = ["gproxy-channel/commandcode"]
 copilotcli = ["gproxy-channel/copilotcli", "gproxy-client/wreq"]
 custom = ["gproxy-channel/custom"]
 dashscope = ["gproxy-channel/dashscope"]
@@ -37,10 +39,13 @@ kiro = ["gproxy-channel/kiro", "gproxy-client/wreq"]
 nvidia = ["gproxy-channel/nvidia"]
 openai = ["gproxy-channel/openai"]
 opencode = ["gproxy-channel/opencode"]
+orcaterm = ["gproxy-channel/orcaterm"]
 openrouter = ["gproxy-channel/openrouter"]
 vercel = ["gproxy-channel/vercel"]
+volcengine = ["gproxy-channel/volcengine"]
 vertex = ["gproxy-channel/vertex"]
 vertexexpress = ["gproxy-channel/vertexexpress"]
+trae = ["gproxy-channel/trae"]
 workbuddy = ["gproxy-channel/workbuddy"]
 xai = ["gproxy-channel/xai"]
 # Every channel this workspace ships.
@@ -55,6 +60,7 @@ channels = [
     "cline",
     "cloudflare_ai_gateway",
     "codex",
+    "commandcode",
     "copilotcli",
     "custom",
     "dashscope",
@@ -69,10 +75,13 @@ channels = [
     "nvidia",
     "openai",
     "opencode",
+    "orcaterm",
     "openrouter",
     "vercel",
+    "volcengine",
     "vertex",
     "vertexexpress",
+    "trae",
     "workbuddy",
     "xai",
 ]
@@ -125,6 +134,7 @@ rust_decimal = { workspace = true }
 sea-orm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true, optional = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }

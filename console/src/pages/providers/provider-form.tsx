@@ -133,7 +133,7 @@ export function ProviderForm({ catalog, provider, onSubmit, pending, error, onCa
           <Field
             key={`${field.name}-${resets[field.name] ?? 0}`}
             className={
-              ["list", "pairs", "dialects", "routing", "model-routing"].includes(controlFor(field))
+              ["list", "pairs", "dialects", "routing", "model-routing", "json"].includes(controlFor(field))
                 ? "sm:col-span-2"
                 : undefined
             }
@@ -160,9 +160,7 @@ export function ProviderForm({ catalog, provider, onSubmit, pending, error, onCa
               id={`${id}-${field.name}`}
               field={field}
               placeholder={configPlaceholder(field, descriptor?.configKeys ?? [], config, baseUrl)}
-              value={field.name === "session_affinity"
-                ? config.session_affinity ?? ["sticky", "round_robin_affinity"].includes(String(config.credential_strategy))
-                : config[field.name]}
+              value={config[field.name]}
               onChange={(value) => change(field.name, value)}
             />
           </Field>

@@ -39,7 +39,7 @@ const MAGIC_TRIGGER_5M_ID: &str =
 const MAGIC_TRIGGER_1H_ID: &str =
     "GPROXY_MAGIC_STRING_TRIGGER_CACHING_CREATE_1FAS5GV9R5H29T5Y2J9584K6O95M2NBVW52C95CX984FRJY";
 
-/// Token → the Claude `ttl` it selects (`None` is the API default).
+/// Token → Claude TTL. OpenAI maps 5m/1h to 30m/12h; None uses the API default.
 const MAGIC: &[(&str, Option<&str>)] = &[
     (MAGIC_TRIGGER_AUTO_ID, None),
     (MAGIC_TRIGGER_5M_ID, Some("5m")),
@@ -257,6 +257,49 @@ mod rules {
             });
         }
         sanitize_claude(body);
+        order_ttls(body);
+    }
+
+    /// Anthropic reads breakpoints in tools → system → messages order and
+    /// rejects a `1h` one after a `5m` one (an absent `ttl` is `5m`). A token's
+    /// ttl may land after a shorter mark, the client's or another token's, so a
+    /// `1h` mark following the first `5m` one is shortened to `5m`; a body in
+    /// valid order is left as it is.
+    fn order_ttls(body: &mut Value) {
+        let Some(root) = body.as_object_mut() else {
+            return;
+        };
+        let mut short_seen = false;
+        let mut visit = |block: &mut Value| {
+            let Some(Value::Object(control)) = block.get_mut("cache_control") else {
+                return;
+            };
+            if control.get("ttl").and_then(Value::as_str) != Some("1h") {
+                short_seen = true;
+            } else if short_seen {
+                control.insert("ttl".into(), Value::String("5m".into()));
+            }
+        };
+        if let Some(Value::Array(tools)) = root.get_mut("tools") {
+            tools.iter_mut().for_each(&mut visit);
+        }
+        if let Some(Value::Array(blocks)) = root.get_mut("system") {
+            blocks.iter_mut().for_each(&mut visit);
+        }
+        let Some(Value::Array(messages)) = root.get_mut("messages") else {
+            return;
+        };
+        for message in messages {
+            let Some(Value::Array(blocks)) = message.get_mut("content") else {
+                continue;
+            };
+            for block in blocks {
+                visit(block);
+                if let Some(Value::Array(nested)) = block.get_mut("content") {
+                    nested.iter_mut().for_each(&mut visit);
+                }
+            }
+        }
     }
 
     /// Canonicalize `system` and message content to block arrays, drop empty
@@ -457,8 +500,8 @@ mod rules {
             let Some(content) = message.get_mut("content") else {
                 continue;
             };
-            if supported && let Some(text) = take_string(content, &mut remaining) {
-                *content = Value::Array(vec![marked("text", "text", text)]);
+            if supported && let Some((text, ttl)) = take_string(content, &mut remaining) {
+                *content = Value::Array(vec![marked("text", "text", text, ttl)]);
             } else if let Value::Array(parts) = content {
                 for part in parts {
                     mark_part(part, true, &mut remaining);
@@ -475,11 +518,11 @@ mod rules {
         let Some(root) = body.as_object_mut() else {
             return;
         };
-        let instruction_triggered = match root.get_mut("instructions") {
-            Some(Value::String(text)) => strip(text).0,
-            _ => false,
+        let (instruction_triggered, ttl) = match root.get_mut("instructions") {
+            Some(Value::String(text)) => strip(text),
+            _ => (false, None),
         };
-        if instruction_triggered && remaining > 0 && prepend_instruction_anchor(root) {
+        if instruction_triggered && remaining > 0 && prepend_instruction_anchor(root, ttl) {
             remaining -= 1;
         }
         if let Some(variables) = root
@@ -489,8 +532,8 @@ mod rules {
             .and_then(Value::as_object_mut)
         {
             for value in variables.values_mut() {
-                if let Some(text) = take_string(value, &mut remaining) {
-                    *value = marked("input_text", "text", text);
+                if let Some((text, ttl)) = take_string(value, &mut remaining) {
+                    *value = marked("input_text", "text", text, ttl);
                 } else {
                     mark_part(value, false, &mut remaining);
                 }
@@ -499,8 +542,8 @@ mod rules {
         let Some(input) = root.get_mut("input") else {
             return;
         };
-        if let Some(text) = take_string(input, &mut remaining) {
-            *input = Value::Array(vec![message("user", text, true)]);
+        if let Some((text, ttl)) = take_string(input, &mut remaining) {
+            *input = Value::Array(vec![message("user", text, true, ttl)]);
             return;
         }
         let Value::Array(items) = input else {
@@ -515,13 +558,13 @@ mod rules {
                 let Some(content) = item.get_mut(field) else {
                     continue;
                 };
-                if let Some(text) = take_string(content, &mut remaining) {
+                if let Some((text, ttl)) = take_string(content, &mut remaining) {
                     let kind = if role.as_deref() == Some("assistant") {
                         "output_text"
                     } else {
                         "input_text"
                     };
-                    *content = Value::Array(vec![marked(kind, "text", text)]);
+                    *content = Value::Array(vec![marked(kind, "text", text, ttl)]);
                 } else if let Value::Array(parts) = content {
                     for part in parts {
                         mark_part(part, false, &mut remaining);
@@ -533,15 +576,19 @@ mod rules {
 
     /// A string carrying a token, stripped and taken when a breakpoint may
     /// still be placed on it. The token is stripped in place either way.
-    fn take_string(value: &mut Value, remaining: &mut usize) -> Option<String> {
+    fn take_string(
+        value: &mut Value,
+        remaining: &mut usize,
+    ) -> Option<(String, Option<&'static str>)> {
         let Value::String(text) = value else {
             return None;
         };
-        if !strip(text).0 || text.trim().is_empty() || *remaining == 0 {
+        let (matched, ttl) = strip(text);
+        if !matched || text.trim().is_empty() || *remaining == 0 {
             return None;
         }
         *remaining -= 1;
-        Some(std::mem::take(text))
+        Some((std::mem::take(text), ttl))
     }
 
     fn mark_part(part: &mut Value, chat: bool, remaining: &mut usize) {
@@ -559,32 +606,33 @@ mod rules {
         let Some(Value::String(text)) = part.get_mut(text_key) else {
             return;
         };
-        if !strip(text).0 {
+        let (matched, ttl) = strip(text);
+        if !matched {
             return;
         }
         let blank = text.trim().is_empty();
         if !blank && *remaining > 0 && !already_marked {
-            part.insert("prompt_cache_breakpoint".into(), breakpoint());
+            part.insert("prompt_cache_breakpoint".into(), breakpoint(ttl));
             *remaining -= 1;
         }
     }
 
-    fn prepend_instruction_anchor(root: &mut Map<String, Value>) -> bool {
+    fn prepend_instruction_anchor(root: &mut Map<String, Value>, ttl: Option<&str>) -> bool {
         let mut items = match root.remove("input") {
             None | Some(Value::Null) => Vec::new(),
-            Some(Value::String(text)) => vec![message("user", text, false)],
+            Some(Value::String(text)) => vec![message("user", text, false, None)],
             Some(Value::Array(items)) => items,
             Some(other) => {
                 root.insert("input".into(), other);
                 return false;
             }
         };
-        items.insert(0, message("developer", " ".into(), true));
+        items.insert(0, message("developer", " ".into(), true, ttl));
         root.insert("input".into(), Value::Array(items));
         true
     }
 
-    fn message(role: &str, text: String, marked_part: bool) -> Value {
+    fn message(role: &str, text: String, marked_part: bool, ttl: Option<&str>) -> Value {
         let kind = if role == "assistant" {
             "output_text"
         } else {
@@ -592,19 +640,23 @@ mod rules {
         };
         let mut part = json!({"type": kind, "text": text});
         if marked_part {
-            part["prompt_cache_breakpoint"] = breakpoint();
+            part["prompt_cache_breakpoint"] = breakpoint(ttl);
         }
         json!({"type": "message", "role": role, "content": [part]})
     }
 
-    fn marked(kind: &str, text_key: &str, text: String) -> Value {
-        let mut value = json!({"type": kind, "prompt_cache_breakpoint": breakpoint()});
+    fn marked(kind: &str, text_key: &str, text: String, ttl: Option<&str>) -> Value {
+        let mut value = json!({"type": kind, "prompt_cache_breakpoint": breakpoint(ttl)});
         value[text_key] = Value::String(text);
         value
     }
 
-    fn breakpoint() -> Value {
-        json!({"mode": "explicit"})
+    fn breakpoint(ttl: Option<&str>) -> Value {
+        match ttl {
+            Some("5m") => json!({"mode": "explicit", "ttl": "30m"}),
+            Some("1h") => json!({"mode": "explicit", "ttl": "12h"}),
+            _ => json!({"mode": "explicit"}),
+        }
     }
 
     // --------------------------------------------------------------- walking
@@ -774,11 +826,11 @@ mod tests {
     fn chat_splits_string_content_and_marks_parts_up_to_the_cap() {
         let mut body = json!({
             "messages": [
-                {"role": "system", "content": format!("rules {AUTO}")},
+                {"role": "system", "content": format!("rules {FIVE_M}")},
                 {"role": "function", "content": format!("fn {AUTO}")},
                 {"role": "user", "content": [
                     {"type": "text", "text": format!("x {AUTO}"), "prompt_cache_breakpoint": {"mode": "explicit"}},
-                    {"type": "text", "text": format!("y {AUTO}")},
+                    {"type": "text", "text": format!("y {ONE_H}")},
                     {"type": "image_url", "image_url": {"url": format!("data:{AUTO}")}},
                     {"type": "refusal", "refusal": format!("no {AUTO}")},
                     {"type": "text", "text": format!("z {AUTO}")}
@@ -788,7 +840,7 @@ mod tests {
         apply(&mut body, Rules::OpenAiChat);
         assert_eq!(
             body["messages"][0]["content"],
-            json!([{"type": "text", "text": "rules ", "prompt_cache_breakpoint": {"mode": "explicit"}}])
+            json!([{"type": "text", "text": "rules ", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}])
         );
         assert_eq!(
             body["messages"][1]["content"], "fn ",
@@ -798,7 +850,7 @@ mod tests {
         assert_eq!(parts[0]["text"], "x ");
         assert_eq!(
             parts[1]["prompt_cache_breakpoint"],
-            json!({"mode": "explicit"})
+            json!({"mode": "explicit", "ttl": "12h"})
         );
         assert_eq!(parts[2]["image_url"]["url"], "data:");
         assert_eq!(
@@ -830,7 +882,7 @@ mod tests {
             "instructions": format!("be terse {ONE_H}"),
             "prompt": {"id": "p", "variables": {
                 "name": format!("Ada {AUTO}"),
-                "doc": {"type": "input_text", "text": format!("doc {AUTO}")},
+                "doc": {"type": "input_text", "text": format!("doc {FIVE_M}")},
                 "file": {"type": "input_file", "file_id": "f"}
             }},
             "input": [
@@ -845,7 +897,7 @@ mod tests {
         assert_eq!(
             input[0],
             json!({"type": "message", "role": "developer", "content": [
-                {"type": "input_text", "text": " ", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                {"type": "input_text", "text": " ", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}
             ]})
         );
         assert_eq!(
@@ -854,7 +906,7 @@ mod tests {
         );
         assert_eq!(
             body["prompt"]["variables"]["doc"]["prompt_cache_breakpoint"],
-            json!({"mode": "explicit"})
+            json!({"mode": "explicit", "ttl": "30m"})
         );
         assert_eq!(
             input[1]["content"],
@@ -874,7 +926,7 @@ mod tests {
         assert_eq!(
             plain["input"],
             json!([{"type": "message", "role": "user", "content": [
-                {"type": "input_text", "text": "just ", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                {"type": "input_text", "text": "just ", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}
             ]}])
         );
     }

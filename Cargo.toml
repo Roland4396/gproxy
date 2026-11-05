@@ -9,6 +9,7 @@ members = [
     "crates/gproxy-file",
     "crates/gproxy-store",
     "crates/gproxy-client",
+    "crates/gproxy-client-sdk",
     "crates/gproxy-channel",
     "crates/gproxy-cache",
     "crates/gproxy-core",
@@ -18,6 +19,9 @@ members = [
     "crates/gproxy-host-edge",
     "crates/gproxy",
     "crates/gproxy-host-tauri",
+    "examples/channel-plugin/channel",
+    "examples/channel-plugin/native",
+    "examples/channel-plugin/edge",
 ]
 
 # `cargo check`, `cargo test` and `cargo clippy` with no `-p` and no
@@ -36,6 +40,10 @@ members = [
 #
 # It is still a member, so `--workspace` builds it, CI builds it, and the
 # lockfile resolves with it in.
+#
+# `examples/channel-plugin` is left out for a smaller reason: it holds a second
+# copy of the `gproxy` binary and of the Worker, and linking them on every
+# `cargo test` buys nothing. CI checks them on their own.
 default-members = [
     "crates/gproxy-protocol",
     "crates/gproxy-protocol-macros",
@@ -44,6 +52,7 @@ default-members = [
     "crates/gproxy-file",
     "crates/gproxy-store",
     "crates/gproxy-client",
+    "crates/gproxy-client-sdk",
     "crates/gproxy-channel",
     "crates/gproxy-cache",
     "crates/gproxy-core",
@@ -55,7 +64,8 @@ default-members = [
 ]
 
 [workspace.package]
-version = "4.1.1"
+version = "4.1.14"
+authors = ["Leen Hawk <leenhawk@leenhawk.com>"]
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/LeenHawk/gproxy"
@@ -73,24 +83,27 @@ base64 = "0.23"
 blake3 = "1"
 fastcdc = "5"
 zstd = "0.14"
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 chacha20poly1305 = "0.11"
-gproxy-app = { path = "crates/gproxy-app", version = "=4.1.1", default-features = false }
-gproxy = { path = "crates/gproxy", version = "=4.1.1", default-features = false }
-gproxy-core = { path = "crates/gproxy-core", version = "=4.1.1", default-features = false }
-gproxy-channel = { path = "crates/gproxy-channel", version = "=4.1.1", default-features = false }
-gproxy-client = { path = "crates/gproxy-client", version = "=4.1.1", default-features = false }
-gproxy-cache = { path = "crates/gproxy-cache", version = "=4.1.1", default-features = false }
-gproxy-file = { path = "crates/gproxy-file", version = "=4.1.1", default-features = false }
-gproxy-host-axum = { path = "crates/gproxy-host-axum", version = "=4.1.1", default-features = false }
-gproxy-host-edge = { path = "crates/gproxy-host-edge", version = "=4.1.1" }
-gproxy-host-tauri = { path = "crates/gproxy-host-tauri", version = "=4.1.1" }
-gproxy-protocol = { path = "crates/gproxy-protocol", version = "=4.1.1", features = ["exhaustive"] }
-gproxy-protocol-macros = { path = "crates/gproxy-protocol-macros", version = "=4.1.1" }
-gproxy-sdk = { path = "crates/gproxy-sdk", version = "=4.1.1", default-features = false }
-gproxy-seaorm = { path = "crates/gproxy-seaorm", version = "=4.1.1" }
-gproxy-store = { path = "crates/gproxy-store", version = "=4.1.1" }
-gproxy-tokenizer = { path = "crates/gproxy-tokenizer", version = "=4.1.1", default-features = false }
+gproxy-app = { path = "crates/gproxy-app", version = "=4.1.14", default-features = false }
+gproxy = { path = "crates/gproxy", version = "=4.1.14", default-features = false }
+gproxy-core = { path = "crates/gproxy-core", version = "=4.1.14", default-features = false }
+gproxy-channel = { path = "crates/gproxy-channel", version = "=4.1.14", default-features = false }
+gproxy-client = { path = "crates/gproxy-client", version = "=4.1.14", default-features = false }
+gproxy-client-sdk = { path = "crates/gproxy-client-sdk", version = "=4.1.14", default-features = false }
+gproxy-cache = { path = "crates/gproxy-cache", version = "=4.1.14", default-features = false }
+gproxy-file = { path = "crates/gproxy-file", version = "=4.1.14", default-features = false }
+gproxy-host-axum = { path = "crates/gproxy-host-axum", version = "=4.1.14", default-features = false }
+gproxy-host-edge = { path = "crates/gproxy-host-edge", version = "=4.1.14", default-features = false }
+gproxy-host-tauri = { path = "crates/gproxy-host-tauri", version = "=4.1.14" }
+gproxy-protocol = { path = "crates/gproxy-protocol", version = "=4.1.14", features = ["exhaustive"] }
+gproxy-protocol-macros = { path = "crates/gproxy-protocol-macros", version = "=4.1.14" }
+gproxy-sdk = { path = "crates/gproxy-sdk", version = "=4.1.14", default-features = false }
+gproxy-seaorm = { path = "crates/gproxy-seaorm", version = "=4.1.14" }
+gproxy-store = { path = "crates/gproxy-store", version = "=4.1.14" }
+gproxy-tokenizer = { path = "crates/gproxy-tokenizer", version = "=4.1.14", default-features = false }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 dashmap = { version = "6" }
 dotenvy = "0.15"
@@ -105,7 +118,11 @@ futures-util = "0.3"
 futures-executor = "0.3"
 form_urlencoded = "1"
 http = "1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 hmac = "0.13"
+# The terminal first-run wizard's prompts. `crossterm` is the portable backend;
+# `fuzzy` filters the channel picker as the operator types.
+inquire = { version = "0.9", default-features = false, features = ["crossterm", "fuzzy"] }
 # The Android host's way in from Java. `0.21` rather than the newer line
 # because that is what `wry` resolves for Tauri's own Android binding, and two
 # JNI crates in one application would be two `JNIEnv` types that cannot meet.
@@ -128,11 +145,12 @@ opendal-service-s3 = { version = "0.59", default-features = false }
 opendal-http-transport-reqwest = { version = "0.59", default-features = false }
 mysql_async = { version = "0.37", default-features = false, features = ["default-rustls"] }
 openssl-sys = "0.9"
+p256 = { version = "0.14", features = ["ecdsa", "pem"] }
 percent-encoding = "2"
 paste = "1"
 proc-macro2 = "1"
 quote = "1"
-redis = { version = "1.7", default-features = false, features = ["connection-manager", "tokio-rustls-comp"] }
+redis = { version = "1.8", default-features = false, features = ["connection-manager", "tokio-rustls-comp"] }
 rsa = { version = "0.9", features = ["sha2"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2", "stream", "socks", "cookies"] }
@@ -154,6 +172,8 @@ send_wrapper = { version = "0.6", features = ["futures"] }
 serde = { version = "1", features = ["derive"] }
 jmespath = { version = "0.5", features = ["sync"] }
 serde_json = "1"
+schemars = { version = "1", features = ["rust_decimal1", "bytes1"] }
+utoipa = "6"
 serde-wasm-bindgen = "0.6"
 syn = { version = "3", features = ["full", "visit-mut"] }
 tauri = { version = "2" }
@@ -194,7 +214,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 worker = { version = "0.8", default-features = false }
 wreq = { version = "0.16", features = ["stream", "ws", "gzip", "brotli", "zstd", "deflate", "socks"] }
 wreq-util = { version = "0.2", features = ["emulation"] }
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 zeroize = "1"
 
 [profile.release]

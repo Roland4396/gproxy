@@ -1,8 +1,8 @@
 //! Explicit credential refresh: one lease per credential across instances,
 //! the channel's `CredentialRefresh` as the only source of new material, and
 //! version-CAS persistence before publication. A peer's newer durable version
-//! satisfies `IfNeeded`; a definitive rejection persists `Dead` with its
-//! reason and is surfaced as `CredentialDead`.
+//! satisfies `IfNeeded`; the channel decides whether a definitive rejection
+//! persists `Dead` or is remembered only for the current in-memory version.
 
 use crate::{
     Core, CoreError, CoreResult, CredentialData, CredentialStatus, CredentialSummary,
@@ -10,7 +10,7 @@ use crate::{
 };
 use gproxy_channel::{
     ChannelError,
-    channel::{CredentialContext, CredentialView},
+    channel::{CredentialContext, CredentialView, RefreshReason},
 };
 use gproxy_seaorm::BatchConnectionTrait;
 use gproxy_store::{
@@ -28,8 +28,6 @@ const LEASE_TTL: Duration = Duration::from_secs(30);
 /// Waiting for a peer's refresh: poll interval and total patience.
 const LEASE_POLL: Duration = Duration::from_millis(100);
 const LEASE_WAIT: Duration = Duration::from_secs(10);
-/// `IfNeeded` refreshes when the material expires within this margin.
-pub const REFRESH_MARGIN_MS: i64 = 60_000;
 
 pub(crate) fn can_refresh(
     provider: &crate::ProviderData,
@@ -47,10 +45,23 @@ pub(crate) fn can_refresh(
 }
 
 /// Whether `IfNeeded` should act on this version now.
-pub(crate) fn needs_refresh(version: &CredentialVersion, now_ms: i64) -> bool {
-    version
-        .expires_at_ms
-        .is_some_and(|expires| expires <= now_ms + REFRESH_MARGIN_MS)
+pub(crate) fn needs_refresh(
+    provider: &crate::ProviderData,
+    credential: &CredentialData,
+    version: &CredentialVersion,
+    now_ms: i64,
+) -> bool {
+    provider
+        .channel
+        .credential_refresh()
+        .is_some_and(|refresher| {
+            refresher
+                .proactive_refresh_reason(
+                    crate::execute::prepare::credential_view(credential, version),
+                    now_ms,
+                )
+                .is_some()
+        })
 }
 
 fn summary(credential_id: &str, version: &CredentialVersion) -> CredentialSummary {
@@ -68,9 +79,10 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
     /// provider ownership, coordinates a shared refresh lease, reads current
     /// Store material, invokes the channel capability, then seals and
     /// CAS-persists before publishing. A peer's newer durable version may
-    /// satisfy `IfNeeded`. A definitive rejection is persisted as Dead with its
-    /// reason and returned as `CredentialDead`; a Dead credential is not
-    /// refreshed again, even with `Force`. The upper layer must authorize.
+    /// satisfy `IfNeeded`. Definitive rejection follows the channel policy:
+    /// durable Dead or an in-memory failure scoped to the credential version.
+    /// A durable Dead credential is not refreshed again, even with `Force`.
+    /// The upper layer must authorize.
     pub async fn refresh_credential(
         &self,
         provider_id: &str,
@@ -118,7 +130,7 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
             return Err(dead(credential_id, &current));
         }
         let now = now_ms();
-        if mode == RefreshMode::IfNeeded && !needs_refresh(&current, now) {
+        if mode == RefreshMode::IfNeeded && !needs_refresh(&provider, &credential, &current, now) {
             return Ok(summary(credential_id, &current));
         }
         let Some(refresher) = provider.channel.credential_refresh() else {
@@ -178,9 +190,19 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
             // A peer refreshed while we waited for the lease.
             return finish_peer(credential_id, &row_version);
         }
-        if mode == RefreshMode::IfNeeded && !needs_refresh(&row_version, now_ms()) {
-            return Ok(summary(credential_id, &row_version));
-        }
+        let reason = match mode {
+            RefreshMode::IfNeeded => {
+                match refresher.proactive_refresh_reason(
+                    crate::execute::prepare::credential_view(credential, &row_version),
+                    now_ms(),
+                ) {
+                    Some(reason) => reason,
+                    None => return Ok(summary(credential_id, &row_version)),
+                }
+            }
+            RefreshMode::Force => RefreshReason::Forced,
+            RefreshMode::UnauthorizedRecovery => RefreshReason::UnauthorizedRecovery,
+        };
 
         let mut context = CredentialContext {
             provider: provider.view(),
@@ -189,7 +211,7 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
                 provider_id: &credential.provider_id,
                 auth_kind: &credential.auth_kind,
                 secret: &row_version.secret,
-                metadata: &credential.metadata,
+                metadata: &row_version.metadata,
                 version: row_version.version,
                 expires_at_ms: row_version.expires_at_ms,
             },
@@ -198,14 +220,19 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
         if !refresher.supports(&context.credential) {
             return Err(CoreError::Channel(ChannelError::UnsupportedService));
         }
+        // Reload the durable row before consulting a version-scoped rejection:
+        // another process may have replaced the failed login material.
+        if let Some(reason) = credential.state.refresh_rejection(row.version) {
+            return Err(CoreError::Channel(ChannelError::RefreshRejected(reason)));
+        }
         let cookie_client = if refresher.connection_purpose(&context.credential)
-            == gproxy_channel::channel::ConnectionPurpose::CookieLogin
+            == gproxy_channel::channel::ConnectionPurpose::Browser
             && row.connection_profile_id.is_none()
         {
             Some(
                 self.provider_client_for_proxy(
                     &provider.entity.id,
-                    gproxy_channel::channel::ConnectionPurpose::CookieLogin,
+                    gproxy_channel::channel::ConnectionPurpose::Browser,
                     row.proxy.as_ref(),
                 )
                 .await?,
@@ -216,9 +243,13 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
         if let Some(client) = &cookie_client {
             context.client = client.as_ref();
         }
-        let update = match refresher.refresh(context).await {
+        let update = match refresher.refresh_with_reason(context, reason).await {
             Ok(update) => update,
             Err(ChannelError::RefreshRejected(reason)) => {
+                if !refresher.persist_rejection(&reason) {
+                    credential.state.reject_refresh(row.version, reason.clone());
+                    return Err(CoreError::Channel(ChannelError::RefreshRejected(reason)));
+                }
                 return Err(self
                     .mark_dead(credential, &row_version, reason, filter)
                     .await
@@ -236,6 +267,7 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
             .credentials()
             .refresh_many_where(
                 vec![RefreshRow {
+                    metadata: update.metadata.clone(),
                     id: credential_id.to_owned(),
                     expected_version: row.version,
                     secret: sealed,
@@ -250,6 +282,7 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
                     version: row.version + 1,
                     expires_at_ms: update.expires_at_ms,
                     secret: update.secret,
+                    metadata: update.metadata.unwrap_or_else(|| row.metadata.clone()),
                     status: CredentialStatus::Active,
                     status_reason: None,
                 });
@@ -304,6 +337,7 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
                     version: current.version + 1,
                     expires_at_ms: current.expires_at_ms,
                     secret: current.secret.clone(),
+                    metadata: current.metadata.clone(),
                     status: CredentialStatus::Dead,
                     status_reason: Some(reason),
                 });
@@ -382,6 +416,7 @@ impl<C: BatchConnectionTrait + Send + Sync> Core<C> {
             version: row.version,
             expires_at_ms: row.expires_at_ms,
             secret,
+            metadata: row.metadata.clone(),
             status: row.status,
             status_reason: row.status_reason.clone(),
         });

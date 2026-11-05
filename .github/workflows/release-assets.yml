@@ -1,6 +1,6 @@
 name: Tidy release assets
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       version:
@@ -11,13 +11,12 @@ on:
         description: Repair the stable release and matching GitLab channel manifests
         type: boolean
         default: false
-
 permissions:
   contents: write
 
 jobs:
   tidy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     concurrency:
       group: gproxy-release-publication

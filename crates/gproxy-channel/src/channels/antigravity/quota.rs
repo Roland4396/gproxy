@@ -13,11 +13,11 @@
 //! `remainingFraction` (the share LEFT) and `resetTime`. A free account
 //! reports only the weekly buckets. A bucket marked `disabled` is not an
 //! allowance (the 5-hour bucket once the weekly one is spent reads
-//! `remainingFraction: 1, disabled: true`), so it yields a display-only
-//! inactive marker with no usable reading and the weekly bucket keeps blocking.
+//! `remainingFraction: 1, disabled: true`), so the local display-only inactive
+//! marker has no usable reading and the weekly bucket keeps blocking.
 //!
 //! Which models belong to a family comes from the catalogue call,
-//! `POST {base}/v1internal:fetchAvailableModels` with `{}`, whose entries
+//! `POST {base}/v1internal:fetchAvailableModels` with `{"project": ...}`, whose entries
 //! name their `modelProvider` and carry a `quotaInfo` for the family's
 //! tightest window. When the summary is not served (404/405/501, no
 //! project, or no bucket read), that `quotaInfo` stands in: the window is
@@ -162,11 +162,6 @@ impl QuotaModel for Antigravity {
         declared: &'d [QuotaDimension],
         entry: &QuotaEntry,
     ) -> Option<Cow<'d, QuotaDimension>> {
-        // An inactive placeholder explains the upstream state, but cannot
-        // open/advance a billing cycle, clear a block, or win reset ordering.
-        if entry.label.as_deref() == Some("antigravity_disabled") {
-            return None;
-        }
         let dimension = classify_by_id(declared, entry)?;
         if dimension.scope != QuotaScope::Unknown
             || !matches!(entry.model_scope, QuotaScope::Models(_))
@@ -256,7 +251,7 @@ impl Catalogue {
 }
 
 /// The summary's buckets as windows, scoped to the catalogue's families.
-/// Unknown buckets yield nothing; disabled ones keep a display-only marker.
+/// Unknown buckets and disabled ones yield nothing.
 pub(super) fn summary_entries(body: &[u8], catalogue: Option<&[u8]>) -> Vec<QuotaEntry> {
     let Ok(summary) = serde_json::from_slice::<Value>(body) else {
         return Vec::new();
@@ -339,7 +334,7 @@ impl QuotaQuery for Antigravity {
             if let Some(project) = fact(&context.credential, "project_id") {
                 let token = super::access_token(&context.credential)?;
                 let mut headers = HeaderMap::new();
-                apply_headers(&mut headers, &config, token, true)?;
+                apply_headers(&mut headers, &config, token)?;
                 super::identity::apply(
                     &mut headers,
                     &context.credential,
@@ -376,4 +371,52 @@ impl QuotaQuery for Antigravity {
             })
         })
     }
+}
+
+/// Code Assist's refusal for a model allowance used up names the wait only in
+/// prose, as Go prints a duration: "You have exhausted your capacity on this
+/// model. Your quota will reset after 3h19m30s." Read that sentence when the
+/// structured fields gave no wait, so the model rests until it returns instead
+/// of being asked again every few minutes.
+pub(super) fn classify_rejection(
+    context: crate::channel::RejectionContext<'_>,
+) -> Option<crate::channel::Rejection> {
+    use crate::channel::{Rejection, RejectionKind};
+    let standard = crate::channel::standard_rejection(context);
+    if standard.is_some_and(|r| {
+        r.retry_after.is_some()
+            || !matches!(
+                r.kind,
+                RejectionKind::RateLimited | RejectionKind::QuotaExhausted
+            )
+    }) {
+        return standard;
+    }
+    let Some(after) = quota_reset_after(context.body) else {
+        return standard;
+    };
+    Some(Rejection {
+        kind: RejectionKind::QuotaExhausted,
+        retry_after: Some(after),
+        model_scoped: true,
+    })
+}
+
+/// A written wait beyond this is not believed.
+const LONGEST_RESET: std::time::Duration = std::time::Duration::from_secs(8 * 24 * 60 * 60);
+
+fn quota_reset_after(body: &[u8]) -> Option<std::time::Duration> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let message = crate::channel::error_object(&value)?
+        .get("message")?
+        .as_str()?;
+    const MARK: &str = "quota will reset after ";
+    let at = message.to_ascii_lowercase().find(MARK)? + MARK.len();
+    let rest = &message[at..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | 'h' | 'm' | 's')))
+        .unwrap_or(rest.len());
+    // The sentence's own full stop is not part of the duration.
+    let duration = rest[..end].trim_end_matches('.');
+    crate::channel::go_duration(duration).filter(|d| !d.is_zero() && *d <= LONGEST_RESET)
 }

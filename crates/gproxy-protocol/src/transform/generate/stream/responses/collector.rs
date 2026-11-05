@@ -57,6 +57,9 @@ impl ResponsesStreamCollector {
         }
     }
     pub fn push(&mut self, event: s::StreamEvent) -> Result<(), TransformError> {
+        if matches!(event, s::StreamEvent::Unknown) {
+            return Ok(());
+        }
         if self.done || self.failed {
             self.failed = true;
             return Err(invalid("event after terminal/failed stream"));
@@ -91,12 +94,15 @@ impl ResponsesStreamCollector {
         }
         self.sequence = Some(seq);
         if self.response.is_none()
-            && !matches!(event, s::StreamEvent::Created(_) | s::StreamEvent::Error(_))
+            && !matches!(
+                event,
+                s::StreamEvent::Created(_) | s::StreamEvent::Error(_) | s::StreamEvent::Metadata(_)
+            )
         {
             return Err(invalid("response.created required before other events"));
         }
         match event {
-            s::StreamEvent::Keepalive => {}
+            s::StreamEvent::Keepalive | s::StreamEvent::Metadata(_) | s::StreamEvent::Unknown => {}
             s::StreamEvent::Created(v) => {
                 if self.response.is_some() {
                     return Err(invalid("duplicate/nonempty response.created"));
@@ -130,30 +136,22 @@ impl ResponsesStreamCollector {
                 if value.response.status != Some(r::ResponseStatus::Failed) {
                     return Err(invalid("failed event status mismatch"));
                 }
-                let detail = value
-                    .response
-                    .error
-                    .map(|error| format!("{:?}: {}", error.code, error.message))
-                    .unwrap_or_else(|| "upstream response failed without error detail".into());
-                return Err(TransformError::invalid_result(
+                let error = value.response.error.unwrap_or_else(|| {
+                    r::ResponseError::builder(
+                        r::ResponseErrorCode::ServerError,
+                        "upstream response failed without error detail".into(),
+                    )
+                    .build()
+                });
+                return Err(TransformError::with_source(
+                    crate::transform::TransformErrorKind::InvalidResult,
                     "responses.stream.failed",
-                    detail,
+                    format!("{:?}: {}", error.code, error.message),
+                    crate::transform::UpstreamError(error),
                 ));
             }
             s::StreamEvent::Error(error) => {
-                return Err(TransformError::invalid_result(
-                    "responses.stream.error",
-                    format!(
-                        "{}{}: {}",
-                        error.code.as_deref().unwrap_or("error"),
-                        error
-                            .param
-                            .as_ref()
-                            .map(|p| format!(" ({p})"))
-                            .unwrap_or_default(),
-                        error.message
-                    ),
-                ));
+                return Err(TransformError::upstream("responses.stream.error", error));
             }
             s::StreamEvent::OutputItemAdded(v) => {
                 if v.output_index != self.items.len() as i64 {

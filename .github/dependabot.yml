@@ -16,8 +16,20 @@ updates:
   - package-ecosystem: npm
     directories:
       - "/console"
-      - "/docs"
       - "/deploy/cloudflare"
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # Keeps pinned base image tags and digests current, like the action commits.
+  - package-ecosystem: docker
+    directories:
+      - "/deploy/container"
+      - "/.cnb"
+      - "/.gitlab"
     schedule:
       interval: weekly
     ignore:
@@ -32,3 +44,7 @@ updates:
       - "/.github/actions/*"
     schedule:
       interval: weekly
+    groups:
+      codeql:
+        patterns:
+          - "github/codeql-action/*"

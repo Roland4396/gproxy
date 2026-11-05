@@ -35,7 +35,7 @@ instructions. Application ZIPs contain the Linux desktop payload, Windows
 executable plus emitted DLLs, or the signed macOS `.app`. Linux ZIPs require
 GTK/WebKitGTK and Windows ZIPs require WebView2 on the host.
 
-Android Application identity is `com.leenhawk.gproxy.app`; its signed update
+Android Application identity is `com.leenhawk.gproxy.desktop`; its signed update
 key remains `<triple>-tauri-apk`. CLI updates still use ZIPs and bare triples.
 The desktop host does not acquire CLI-style executable replacement.
 
@@ -83,7 +83,7 @@ x64 CLI runs under Wine; the packed Wine check is informational because Wine
 can reject UPX loaders. The Windows packaging job requires both uncompressed
 and compressed x64 CLI executables to start successfully on Windows before
 publication.
-Windows ARM64 retains the patched UPX entry stub with fast NRV2E compression.
+Windows ARM64 uses an upstream UPX development revision with ARM64 PE LZMA support.
 macOS Mach-O is left uncompressed. Windows ARM64 execution and desktop GUI
 behavior are not exercised by these packaging checks.
 

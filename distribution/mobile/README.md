@@ -8,7 +8,7 @@ does not create store products, submit a review, or publish an application.
 
 ## Identity and versions
 
-- Application/bundle name: `com.leenhawk.gproxy.app`; listing name: **GPROXY**.
+- Application/bundle name: `com.leenhawk.gproxy.desktop`; listing name: **GPROXY**.
 - The graphical application uses this identifier on Android, HarmonyOS and all
   desktop platforms. The command-line edition already exists as **GPROXY CLI**.
   `com.leenhawk.gproxy.cli` is its corresponding project namespace. New macOS CLI service
@@ -38,7 +38,8 @@ does not create store products, submit a review, or publish an application.
 
 ## Android builds
 
-Use Rust 1.98, Node 24, pnpm 9.15.9, Go 1.27.1, JDK 21, Android SDK 36,
+Use the Rust, Go, Node, Gradle and pnpm versions pinned in
+`scripts/mobile/android-toolchain.sh`, plus JDK 21, Android SDK 36,
 build-tools 36.1.0 and NDK 30.0.15729638. Native dependencies also need clang,
 libclang, CMake, pkg-config and Ninja. Put Go on PATH. Set `ANDROID_HOME` and
 `ANDROID_NDK_HOME` to the installed tools.
@@ -51,12 +52,17 @@ bash scripts/mobile/build-android.sh google-play
 bash scripts/mobile/build-android.sh appgallery
 ```
 
+Android builds use `scripts/mobile/build-android.sh` for all distributions.
+Its default `universal` target includes both `arm64-v8a` and `x86_64`; pass
+`aarch64` or `x86_64` explicitly for a single-ABI package. GitHub direct APKs
+keep their per-architecture names and updater. Store packages omit that updater.
+The verifier rejects missing, extra or incorrectly labelled ABIs in APKs/AABs.
 Each script builds the Console and Rust library from source. Output is in
-`dist/mobile/<channel>/aarch64/`. Google Play produces an AAB plus an APK for
+`dist/mobile/<channel>/universal/`. Google Play produces an AAB plus an APK for
 inspection/testing; upload the AAB to Play. F-Droid and Android AppGallery use
 APKs. The script checks package/version, a non-debuggable manifest, removal of
 the APK updater and install permission, ELF 16 KiB alignment and APK ZIP alignment.
-Store packages use ThinLTO and no UPX. A 16 KiB device/emulator test is still
+Store packages use fat LTO and the pinned Android UPX tool. A 16 KiB device/emulator test is still
 required; binary alignment alone is not runtime validation.
 
 `GPROXY_ANDROID_DISTRIBUTION` selects `fdroid`, `google-play` or `appgallery`.
@@ -64,13 +70,14 @@ Gradle removes the install permission, update Activity/provider and update
 notification action. Rust excludes the JNI download entry point. Without this
 environment variable, the ordinary direct-distribution build keeps its updater.
 
-Store builds use the same on-demand font download/cache as desktop applications,
-with license notices kept offline. All store builds open a native, offline privacy notice before Tauri or the
-gateway starts. Declining exits; accepting records the notice version. Boot and
-sticky service restarts cannot bypass an unaccepted notice. The running Android
-gateway's notification provides a **Privacy** action for rereading it. Application
-settings also include an offline **Privacy notice** dialog on both platforms. Change
-`distribution/mobile/privacy/version.txt` whenever the notice materially changes.
+Applications use system fonts by default. Setup and Settings offer an optional font
+download from the documentation site, saved by GPROXY in its local data directory
+for offline use. Settings can delete the download and restore system fonts.
+Font license notices remain bundled.
+Applications launch directly without requiring acceptance of the privacy notice.
+Application settings include an offline **Privacy notice** dialog on all platforms.
+Android store builds also provide a **Privacy** action in the gateway notification.
+The notice is informational; closing it does not stop the gateway.
 
 By default, packages are **unsigned preparation output**. For Play/AppGallery,
 set these environment variables for a release build:
@@ -86,7 +93,7 @@ never put passwords or private keys in store listing files or issue comments.
 
 ## F-Droid submission
 
-The recipe is `distribution/fdroid/com.leenhawk.gproxy.app.yml.in`. It uses pinned,
+The recipe is `distribution/fdroid/com.leenhawk.gproxy.desktop.yml.in`. It uses pinned,
 checksum-verified Node/Go/Gradle tools and the F-Droid `rustup` source library.
 The Android UPX packer is built from the same pinned FLOSS source revision as
 the direct-release packer, outside the scanned application checkout. Store
@@ -108,12 +115,12 @@ newer; the earlier `v4.0.2` tag does not contain this build support):
 
 ```sh
 python3 scripts/mobile/fdroid-metadata.py <public-commit-or-tag>
-# Copy the generated dist/mobile/fdroid/metadata/com.leenhawk.gproxy.app.yml
+# Copy the generated dist/mobile/fdroid/metadata/com.leenhawk.gproxy.desktop.yml
 # into your fdroiddata fork's metadata/ directory, then in that fork:
 fdroid readmeta
-fdroid lint com.leenhawk.gproxy.app
-fdroid checkupdates --allow-dirty com.leenhawk.gproxy.app
-fdroid build --server com.leenhawk.gproxy.app
+fdroid lint com.leenhawk.gproxy.desktop
+fdroid checkupdates --allow-dirty com.leenhawk.gproxy.desktop
+fdroid build --server com.leenhawk.gproxy.desktop
 ```
 
 Do not submit the `.yml.in` template or claim a local APK build is an F-Droid
@@ -136,9 +143,33 @@ After initial inclusion, F-Droid owns version tracking and build-recipe updates:
   version and selects the matching source revision.
 
 Each stable release must increase the Android version code and publish
-`gproxy-fdroid-aarch64.apk` at the URL declared by `Binaries`. The Release
-workflow retains that signed reference APK build. GitHub does not submit a
-separate F-Droid merge request for every release.
+`gproxy-fdroid-universal.apk` at the URL declared by `Binaries`. The Release
+workflow uses six parallel channel/ABI jobs: direct, F-Droid and Google Play,
+each for ARM64 and x86_64. They share the pinned Android image and Console
+artifact, with separate channel/ABI Cargo caches. Each job exports its native
+libraries, generated Android project inputs and a checked per-ABI APK.
+
+A packaging job verifies that both ABIs come from the same commit, version and
+application identity, then assembles the universal F-Droid APK and Play AAB with
+`GPROXY_ANDROID_REUSE_NATIVE=1`. Gradle verifies that the prebuilt libraries exist
+and does not call the Rust compiler in this phase. Only this job receives private
+signing keys. The two direct APKs are signed from their existing builder outputs.
+There is no second self-rebuild in the release path. UPX outputs are validated
+before reuse, so incremental packaging never strips an already-packed library.
+F-Droid still performs its own independent rebuild; the manual reproducibility
+workflow remains available for diagnosing byte differences.
+GitHub does not submit a separate F-Droid merge request for every release.
+
+The Play AAB uses the separate `GOOGLE_PLAY_UPLOAD_KEYSTORE_B64`,
+`GOOGLE_PLAY_UPLOAD_STORE_PASSWORD`, `GOOGLE_PLAY_UPLOAD_KEY_ALIAS` and optional
+`GOOGLE_PLAY_UPLOAD_KEY_PASSWORD` secrets in the `release` environment. Without
+that upload key, the AAB is unsigned preparation output, not ready for upload.
+The public APK key is never silently substituted. No automatic Play submission
+is performed.
+
+Moving an existing F-Droid recipe from the ARM64 reference to the universal
+reference requires updating both `Binaries` and `output` in fdroiddata; merging
+an old recipe does not update those fields automatically.
 
 Initial inclusion and changes to the build recipe still require a manual
 fdroiddata merge request. Until the initial MR is merged, F-Droid's updater

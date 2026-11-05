@@ -90,7 +90,10 @@ fn realtime_query(source: Option<String>) -> Result<String, ChannelError> {
 
 /// Whether the operation is served over a socket rather than over HTTP.
 fn is_websocket(operation: Operation, dialect: Dialect) -> bool {
-    operation == Operation::ConnectRealtime || dialect == Dialect::OpenAiResponsesWebSocket
+    matches!(
+        operation,
+        Operation::ConnectRealtime | Operation::ConnectLive
+    ) || dialect == Dialect::OpenAiResponsesWebSocket
 }
 
 impl OpenAi {
@@ -197,13 +200,12 @@ impl BaseChannel for OpenAi {
         ChannelDescriptor {
             id: ID,
             display_name: "OpenAI",
+            credential_kinds: vec!["api_key"],
             login_modes: vec![LoginMode::ApiKey],
             capabilities: ChannelCapabilities {
-                refresh: false,
                 quota_query: true,
-                quota_reset: false,
-                services: false,
                 websocket: true,
+                ..Default::default()
             },
             config_keys: [
                 ConfigKey::optional(
@@ -261,6 +263,7 @@ impl BaseChannel for OpenAi {
             | Operation::GetModel
             | Operation::CompactContent
             | Operation::CreateModeration
+            | Operation::CreateDecision
             | Operation::CreateEmbedding
             | Operation::CreateImage
             | Operation::EditImage
@@ -277,6 +280,12 @@ impl BaseChannel for OpenAi {
             | Operation::ListVideos
             | Operation::DeleteVideo
             | Operation::DownloadVideoContent
+            | Operation::CreateVoice
+            | Operation::CreateRealtimeClientSecret
+            | Operation::HangupRealtimeCall
+            | Operation::CreateLiveSession
+            | Operation::HangupLiveSession
+            | Operation::ConnectLive
             | Operation::CreateRealtimeCall
             | Operation::ConnectRealtime => vec![Dialect::OpenAi],
             _ => Vec::new(),

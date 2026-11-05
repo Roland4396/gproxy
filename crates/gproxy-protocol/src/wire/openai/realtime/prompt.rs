@@ -6,10 +6,11 @@ use super::wire::present_nullable;
 use crate::Rest;
 use serde::{Deserialize, Serialize};
 
-/// Source: `openai/types/responses/response_prompt.py`, `ResponsePrompt`.
+// Source: `openai/types/responses/response_prompt.py`, `ResponsePrompt`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponsePrompt {
     pub id: String,
     #[serde(
@@ -28,11 +29,12 @@ pub struct ResponsePrompt {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/responses/response_prompt.py`, `Variables`.
+// Source: `openai/types/responses/response_prompt.py`, `Variables`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponsePromptVariables {
     Text(String),
     ResponseInputText(ResponseInputText),
@@ -40,10 +42,11 @@ pub enum ResponsePromptVariables {
     ResponseInputFile(ResponseInputFile),
 }
 
-/// Source: `openai/types/responses/tool_choice_options.py`, `ToolChoiceOptions`.
+// Source: `openai/types/responses/tool_choice_options.py`, `ToolChoiceOptions`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceOptions {
     #[serde(rename = "none")]
     None,
@@ -53,10 +56,11 @@ pub enum ToolChoiceOptions {
     Required,
 }
 
-/// Source: `openai/types/responses/tool_choice_function.py`, `ToolChoiceFunction`.
+// Source: `openai/types/responses/tool_choice_function.py`, `ToolChoiceFunction`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceFunction {
     pub name: String,
     #[serde(rename = "type")]
@@ -65,10 +69,11 @@ pub struct ToolChoiceFunction {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/responses/tool_choice_mcp.py`, `ToolChoiceMcp`.
+// Source: `openai/types/responses/tool_choice_mcp.py`, `ToolChoiceMcp`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceMcp {
     pub server_label: String,
     #[serde(rename = "type")]
@@ -83,13 +88,14 @@ pub struct ToolChoiceMcp {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/shared/metadata.py`, `Metadata`.
+// Source: `openai/types/shared/metadata.py`, `Metadata`.
 pub type Metadata = std::collections::BTreeMap<String, String>;
 
-/// Source: `openai/types/responses/response_input_text.py`, `ResponseInputText`.
+// Source: `openai/types/responses/response_input_text.py`, `ResponseInputText`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputText {
     pub text: String,
     #[serde(rename = "type")]
@@ -104,10 +110,11 @@ pub struct ResponseInputText {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/responses/response_input_image.py`, `ResponseInputImage`.
+// Source: `openai/types/responses/response_input_image.py`, `ResponseInputImage`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputImage {
     pub detail: ImageDetail,
     #[serde(rename = "type")]
@@ -134,10 +141,11 @@ pub struct ResponseInputImage {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/responses/response_input_file.py`, `ResponseInputFile`.
+// Source: `openai/types/responses/response_input_file.py`, `ResponseInputFile`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputFile {
     #[serde(rename = "type")]
     pub type_: ResponseInputFileType,
@@ -181,20 +189,24 @@ pub struct ResponseInputFile {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/responses/response_input_text.py`, `PromptCacheBreakpoint`.
+// Source: `openai/types/responses/response_input_text.py`, `PromptCacheBreakpoint`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputTextPromptCacheBreakpoint {
     pub mode: ResponseInputTextPromptCacheBreakpointMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<PromptCacheBreakpointTtl>,
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
     pub rest: Rest,
 }
 
-/// Source: `openai/types/responses/image_detail.py`, `ImageDetail`.
+// Source: `openai/types/responses/image_detail.py`, `ImageDetail`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ImageDetail {
     #[serde(rename = "low")]
     Low,
@@ -206,22 +218,28 @@ pub enum ImageDetail {
     Original,
 }
 
-/// Source: `openai/types/responses/response_input_image.py`, `PromptCacheBreakpoint`.
+// Source: `openai/types/responses/response_input_image.py`, `PromptCacheBreakpoint`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputImagePromptCacheBreakpoint {
     pub mode: ResponseInputImagePromptCacheBreakpointMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<PromptCacheBreakpointTtl>,
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
     pub rest: Rest,
 }
 
-/// Source: `openai/types/responses/response_input_file.py`, `PromptCacheBreakpoint`.
+// Source: `openai/types/responses/response_input_file.py`, `PromptCacheBreakpoint`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputFilePromptCacheBreakpoint {
     pub mode: ResponseInputFilePromptCacheBreakpointMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<PromptCacheBreakpointTtl>,
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
     pub rest: Rest,
 }
@@ -229,6 +247,7 @@ pub struct ResponseInputFilePromptCacheBreakpoint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceFunctionType {
     #[serde(rename = "function")]
     Function,
@@ -237,6 +256,7 @@ pub enum ToolChoiceFunctionType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceMcpType {
     #[serde(rename = "mcp")]
     Mcp,
@@ -245,6 +265,7 @@ pub enum ToolChoiceMcpType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputTextType {
     #[serde(rename = "input_text")]
     InputText,
@@ -253,6 +274,7 @@ pub enum ResponseInputTextType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputImageType {
     #[serde(rename = "input_image")]
     InputImage,
@@ -261,6 +283,7 @@ pub enum ResponseInputImageType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputFileType {
     #[serde(rename = "input_file")]
     InputFile,
@@ -269,6 +292,7 @@ pub enum ResponseInputFileType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputFileDetail {
     #[serde(rename = "auto")]
     Auto,
@@ -278,9 +302,23 @@ pub enum ResponseInputFileDetail {
     High,
 }
 
+// Source: Realtime.md `prompt_cache_breakpoint.ttl` (2026-10-27).
+/// Omitted inherits the request TTL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum PromptCacheBreakpointTtl {
+    #[serde(rename = "30m")]
+    ThirtyMinutes,
+    #[serde(rename = "12h")]
+    TwelveHours,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputTextPromptCacheBreakpointMode {
     #[serde(rename = "explicit")]
     Explicit,
@@ -289,6 +327,7 @@ pub enum ResponseInputTextPromptCacheBreakpointMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputImagePromptCacheBreakpointMode {
     #[serde(rename = "explicit")]
     Explicit,
@@ -297,6 +336,7 @@ pub enum ResponseInputImagePromptCacheBreakpointMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputFilePromptCacheBreakpointMode {
     #[serde(rename = "explicit")]
     Explicit,

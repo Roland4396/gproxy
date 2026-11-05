@@ -119,6 +119,12 @@ impl ResponsesToClaudeStream {
         &mut self,
         event: s::StreamEvent,
     ) -> Result<Converted<Vec<cs::StreamEvent>>, TransformError> {
+        if matches!(event, s::StreamEvent::Unknown) {
+            return Ok(Converted {
+                value: Vec::new(),
+                report: Report::default(),
+            });
+        }
         if self.failed || self.terminal {
             self.failed = true;
             return Err(invalid("event after terminal or failure"));
@@ -141,6 +147,7 @@ impl ResponsesToClaudeStream {
             .push(event.clone())?;
         let mut out = Vec::new();
         match event {
+            s::StreamEvent::Metadata(_) | s::StreamEvent::Unknown => {}
             s::StreamEvent::Keepalive => out.push(cs::StreamEvent::Ping(cs::PingEvent {
                 rest: Default::default(),
             })),
@@ -268,11 +275,15 @@ impl ResponsesToClaudeStream {
         if self.started {
             return Ok(());
         }
-        let (Some(id), Some(model), Some(usage)) =
-            (&self.response_id, &self.model, &mut self.usage)
-        else {
+        let (Some(id), Some(model)) = (&self.response_id, &self.model) else {
             return Ok(());
         };
+        // Responses may only report usage at completion. Do not hold content
+        // until then: message_delta replaces these provisional counters with
+        // the actual final usage, which finish() still requires from the source.
+        let usage = self
+            .usage
+            .get_or_insert_with(|| c::Usage::builder(0, 0).build());
         if let Some(tier) = self.tier {
             if usage
                 .service_tier

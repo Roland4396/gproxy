@@ -23,7 +23,7 @@ use super::{
 
 /// The only version this build writes, and the only one it accepts. It is not
 /// the schema version: it names the shape of the envelope below.
-pub const EXPORT_FORMAT_VERSION: u32 = 5;
+pub const EXPORT_FORMAT_VERSION: u32 = 6;
 
 /// Codec names as they appear in [`SealedSecretDto::codec`], read from the
 /// envelope byte the sealed blob starts with rather than from configuration:
@@ -36,6 +36,7 @@ pub const CODEC_UNKNOWN: &str = "unknown";
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ExportRequest {
     /// Whether the sealed credential blobs travel with the configuration. An
     /// export without them still restores every row; the credentials simply
@@ -49,6 +50,7 @@ pub struct ExportRequest {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigurationExportDto {
     pub format_version: u32,
     pub exported_at_ms: i64,
@@ -69,6 +71,7 @@ pub struct ConfigurationExportDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigurationDataDto {
     #[serde(default)]
     pub connection_profiles: Vec<ConnectionProfileDto>,
@@ -114,6 +117,7 @@ pub struct ConfigurationDataDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ExportCredentialDto {
     #[serde(flatten)]
     pub credential: CredentialDto,
@@ -129,6 +133,7 @@ pub struct ExportCredentialDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SealedSecretDto {
     /// `plaintext`, `aes-gcm`, or `unknown` for an envelope this build does
     /// not recognize. Carried so an importer can refuse early rather than
@@ -152,6 +157,7 @@ impl std::fmt::Debug for SealedSecretDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", ts(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ImportMode {
     /// Write every row of the document, leaving anything it does not mention
     /// alone. This is the additive mode: two deployments can be merged.
@@ -167,6 +173,7 @@ pub enum ImportMode {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ImportRequest {
     pub export: ConfigurationExportDto,
     #[serde(default)]
@@ -196,6 +203,7 @@ impl std::fmt::Debug for ImportRequest {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ImportReportDto {
     pub created: u64,
     pub updated: u64,

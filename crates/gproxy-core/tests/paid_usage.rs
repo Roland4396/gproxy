@@ -94,17 +94,19 @@ async fn usable(h: &Harness, model: &str) -> bool {
             completion.await.unwrap();
             true
         }
-        Err(CoreError::NoUsableCredential) => false,
+        Err(CoreError::NoUsableCredential { .. }) => false,
         Err(error) => panic!("unexpected error: {error}"),
     }
 }
 
 async fn permission(h: &Harness, allow: bool) {
+    let version = h.core.snapshot().credentials["a"].state.load().version + 1;
     h.core
         .store()
         .credentials()
         .update_many(vec![credential::ActiveModel {
             id: Set("a".into()),
+            version: Set(version),
             metadata: Set(json!({"user_id":"upstream-user","allow_paid_usage":allow})),
             ..Default::default()
         }])
@@ -240,6 +242,16 @@ async fn paid_usage_toggle_reuses_persisted_exhaustion_without_clearing_limits()
 async fn paid_usage_permission_never_bypasses_upstream_cooldowns_or_local_limits() {
     let h = cline().await;
     permission(&h, true).await;
+    // Another request holds the early probe of a cooled-down credential.
+    h.core
+        .cache()
+        .acquire_lease(
+            &gproxy_core::keys::credential_probe("p", "a"),
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     for source in [
         gproxy_core::BlockSource::RateLimited,
         gproxy_core::BlockSource::Counted {

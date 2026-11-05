@@ -6,16 +6,21 @@
 //! binary was built with; the gateway cannot choose it.
 //!
 //! **There is no delete, only [`OAuthClients::retire`].** A hard delete would
-//! drop the row that session history refers to, and — worse — would let the
-//! same `client_id` be registered again and inherit the grants the old
-//! registration had collected. Retirement soft-deletes the row, disables it,
-//! and irreversibly revokes every live grant, every grant's internal key and
-//! every issued token, through the store's `retire_many`, which does all of
-//! that as one atomic batch.
+//! drop the row that grants, their internal keys and session history refer
+//! to. Retirement soft-deletes the row, disables it, and irreversibly revokes
+//! every live grant, every grant's internal key and every issued token,
+//! through the store's `retire_many`, which does all of that as one atomic
+//! batch.
+//!
+//! **A retired `client_id` can be registered again.** The id is the one a
+//! third-party binary was built with, so refusing it would end the gateway's
+//! support for that binary for good. The new registration reuses the retired
+//! row; the grants retirement revoked stay revoked, and every user authorizes
+//! afresh.
 
-use gproxy_seaorm::BatchConnectionTrait;
+use gproxy_seaorm::{BatchConnectionTrait, BatchStatement};
 use gproxy_store::{Repository, entity::oauth::client};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Select, Set};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, Select, Set};
 use serde_json::Value;
 
 use super::{
@@ -24,7 +29,7 @@ use super::{
 };
 use crate::{
     AppError, Result,
-    dto::{ListQuery, OAuthClientDto, OAuthClientPatch, OAuthClientWrite, Page},
+    dto::{BatchItem, ListQuery, OAuthClientDto, OAuthClientPatch, OAuthClientWrite, Page},
 };
 
 pub struct OAuthClients<'a, C> {
@@ -47,12 +52,7 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> OAuthClients<'_, C> {
         crud::get(self, id).await
     }
 
-    /// Register a client.
-    ///
-    /// Re-registering a retired `client_id` is refused rather than silently
-    /// reviving it: the grants the previous registration collected are
-    /// revoked, and a caller that got a fresh row under the old id would be
-    /// entitled to assume otherwise.
+    /// Register a client, or re-register a retired one under the same id.
     pub async fn create(&self, write: OAuthClientWrite) -> Result<OAuthClientDto> {
         crud::create(self, write).await
     }
@@ -61,32 +61,85 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> OAuthClients<'_, C> {
         crud::update(self, id, patch).await
     }
 
+    /// Creates and updates in one revision commit, or a list of deletes, each
+    /// of which retires its client.
+    ///
+    /// The two do not mix. A retirement is its own transaction (see
+    /// [`OAuthClients::retire`]), so a batch that also created or patched a
+    /// row could not be one commit; refusing the mix keeps every batch
+    /// all-or-nothing.
+    pub async fn batch(
+        &self,
+        items: Vec<BatchItem<OAuthClientWrite, OAuthClientPatch>>,
+    ) -> Result<Vec<Option<OAuthClientDto>>> {
+        let ids: Vec<String> = items
+            .iter()
+            .filter_map(|item| match item {
+                BatchItem::Delete(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        if ids.is_empty() {
+            return crud::batch(self, items).await;
+        }
+        if ids.len() != items.len() {
+            return Err(AppError::invalid(
+                "a batch that retires oauth clients cannot also create or patch them",
+            ));
+        }
+        self.retire_all(&ids).await?;
+        Ok(ids.iter().map(|_| None).collect())
+    }
+
     /// Soft-delete the client and revoke everything it holds.
+    pub async fn retire(&self, id: &str) -> Result<OAuthClientDto> {
+        self.retire_all(std::slice::from_ref(&id.to_owned()))
+            .await?;
+        crud::get(self, id).await
+    }
+
+    /// Retire every client in `ids`, or none of them.
+    ///
+    /// Each id is checked first, so an unknown or already retired one refuses
+    /// the whole list before anything is revoked.
     ///
     /// Two transactions, unavoidably and deliberately in this order. The first
     /// is `retire_many`, which is itself atomic and is where the revocation
     /// happens; the second is an empty revision commit whose only job is to
     /// move `config_revision` and notify the peers, because the client
-    /// allowlist is part of `AppData`. If the second fails, the client is
+    /// allowlist is part of `AppData`. If the second fails, the clients are
     /// still retired and the peers converge on the revision poll — a window
     /// in which a peer is *stricter* than the database, never looser.
-    pub async fn retire(&self, id: &str) -> Result<OAuthClientDto> {
-        crud::row::<C, Self>(self, id).await?;
+    async fn retire_all(&self, ids: &[String]) -> Result<()> {
+        for id in ids {
+            if crud::row::<C, Self>(self, id)
+                .await?
+                .deleted_at_ms
+                .is_some()
+            {
+                return Err(AppError::Conflict(format!(
+                    "oauth client `{id}` is already retired"
+                )));
+            }
+        }
         let retired = self
             .writer
             .store()
             .oauth_clients()
-            .retire_many(std::slice::from_ref(&id.to_owned()), crate::now_ms())
+            .retire_many(ids, crate::now_ms())
             .await?;
-        if !retired.first().copied().unwrap_or(false) {
+        // A peer retired one between the check and the write. The rest are
+        // retired regardless, so the peers still have to hear about it.
+        let raced = ids.iter().zip(&retired).find(|(_, done)| !**done);
+        self.writer
+            .commit(Vec::new(), &[Scope::OAuthClients, Scope::Keys])
+            .await?;
+        if let Some((id, _)) = raced {
             return Err(AppError::Conflict(format!(
                 "oauth client `{id}` is already retired"
             )));
         }
-        self.writer
-            .commit(Vec::new(), &[Scope::OAuthClients, Scope::Keys])
-            .await?;
-        crud::get(self, id).await
+        Ok(())
     }
 
     /// Registered redirect URIs.
@@ -154,7 +207,9 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Shape<C> for OAuthClients<
 
     async fn build(&self, write: OAuthClientWrite) -> Result<(client::ActiveModel, String)> {
         let id = crud::text(&write.id, "id")?;
-        if crud::row::<C, Self>(self, &id).await.is_ok() {
+        if let Ok(row) = crud::row::<C, Self>(self, &id).await
+            && row.deleted_at_ms.is_none()
+        {
             return Err(AppError::Conflict(format!(
                 "oauth client `{id}` is already registered"
             )));
@@ -167,6 +222,23 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Shape<C> for OAuthClients<
             deleted_at_ms: Set(None),
         };
         Ok((row, id))
+    }
+
+    /// A retired row is taken over rather than inserted beside. The update is
+    /// conditioned on the row still being retired, so a concurrent
+    /// registration that already revived it is not overwritten.
+    async fn insert(&self, model: client::ActiveModel, id: &str) -> Result<BatchStatement> {
+        let repository = self.repository();
+        if crud::row::<C, Self>(self, id).await.is_err() {
+            return Ok(BatchStatement::Execute(repository.insert_statement(model)?));
+        }
+        repository
+            .update_statement_where(
+                model,
+                Condition::all().add(client::Column::DeletedAtMs.is_not_null()),
+            )?
+            .map(BatchStatement::Execute)
+            .ok_or_else(|| AppError::internal("re-registration set no column"))
     }
 
     async fn change(

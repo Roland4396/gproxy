@@ -21,13 +21,12 @@
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", ts(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum LoginMode {
     /// Browser redirect with PKCE; `OAuthAuthorizationCode`.
     AuthorizationCode,
     /// User code shown, host polls; `OAuthDeviceCode`.
     DeviceCode,
-    /// A browser session cookie exchanged for a credential; `CookieLogin`.
-    Cookie,
     /// A key the operator pastes. No channel trait is involved: the secret is
     /// stored as given and the channel injects it at request time.
     ApiKey,
@@ -39,6 +38,7 @@ pub enum LoginMode {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChannelCapabilities {
     /// `CredentialRefresh`: the credential can be renewed without a person.
     pub refresh: bool,
@@ -52,6 +52,10 @@ pub struct ChannelCapabilities {
     /// derivable from an accessor; a channel that overrides a socket operation
     /// declares it.
     pub websocket: bool,
+    /// `QuotaModel::allows_paid_usage` reads the credential metadata flag
+    /// `allow_paid_usage`, so the console offers the switch. Not derivable
+    /// either: the method has a default, and overriding it is invisible here.
+    pub paid_usage: bool,
 }
 
 /// How a configuration value is written, for form rendering and validation.
@@ -59,6 +63,7 @@ pub struct ChannelCapabilities {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", ts(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConfigKeyKind {
     String,
     Bool,
@@ -75,6 +80,7 @@ pub enum ConfigKeyKind {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigKey {
     pub name: &'static str,
     pub kind: ConfigKeyKind,
@@ -123,7 +129,7 @@ impl ConfigKey {
 /// Read from the `config` JSON for every channel, by the host rather than by
 /// the channel itself: `credential_strategy` selects among the provider's
 /// credentials, `allowed_headers` adds to the global and channel header sets.
-pub const HOST_CONFIG_KEYS: [ConfigKey; 4] = [
+pub const HOST_CONFIG_KEYS: [ConfigKey; 3] = [
     ConfigKey::optional(
         "forward_thinking",
         ConfigKeyKind::Bool,
@@ -133,11 +139,6 @@ pub const HOST_CONFIG_KEYS: [ConfigKey; 4] = [
         "credential_strategy",
         ConfigKeyKind::String,
         "How the host picks among this provider's credentials.",
-    ),
-    ConfigKey::optional(
-        "session_affinity",
-        ConfigKeyKind::Bool,
-        "Reuse a session credential while usable; defaults on for legacy sticky strategies.",
     ),
     ConfigKey::optional(
         "allowed_headers",
@@ -151,12 +152,15 @@ pub const HOST_CONFIG_KEYS: [ConfigKey; 4] = [
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChannelDescriptor {
     /// Matches `BaseChannel::id` and the provider's `channel` column.
     pub id: &'static str,
     pub display_name: &'static str,
     /// Empty means no login flow is offered for this channel.
     pub login_modes: Vec<LoginMode>,
+    /// Stored credential types accepted on manual creation, distinct from login flows.
+    pub credential_kinds: Vec<&'static str>,
     pub capabilities: ChannelCapabilities,
     pub config_keys: Vec<ConfigKey>,
 }

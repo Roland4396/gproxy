@@ -1,35 +1,66 @@
 //! The Google login and token refresh, wired to Antigravity's own client.
 //!
-//! `authorize` builds the consent URL for the host's PKCE challenge and
-//! state; `exchange` turns the code into tokens and then learns the Cloud
-//! project and the tier, which travel back in `provider_fields` for the host
-//! to persist. `refresh` renews the access token, carries the discovered
+//! Everything here is what the Antigravity IDE's Electron main process does
+//! (`resources/app/out/main.js`, IDE 2.6.0): google-auth-library 10.3.0's
+//! `OAuth2Client` for the login and refresh, and its `request` for the Code
+//! Assist setup calls and the profile.
+//!
+//! `authorize` builds the consent URL for the host's `state` (the IDE uses
+//! no PKCE, so the host's challenge is not sent); `exchange` turns the code
+//! into tokens and then learns the Cloud project and the tier, which travel
+//! back in `provider_fields` for the host to persist. As in CPA's management
+//! login (`samples/CLIProxyAPI/internal/api/handlers/management/auth_files_provider_oauth.go`),
+//! project discovery is best effort: an account's service eligibility must
+//! not prevent saving its OAuth tokens. `refresh` renews the access token,
+//! carries the discovered
 //! facts forward, and completes a discovery that the login could not finish
 //! (v3 `antigravity/{login,auth}.rs`, `shared/{google_login,google_oauth}.rs`).
 
 use super::{
-    Antigravity, AntigravityConfig, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REDIRECT_URI,
-    DEFAULT_TOKEN_URL, FALLBACK_TIER, OAUTH_SCOPE, base_url,
+    AUTH_LIBRARY, Antigravity, AntigravityConfig, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET,
+    DEFAULT_REDIRECT_URI, DEFAULT_TOKEN_URL, EDITOR_USER_AGENT, IDE_VERSION, NODE_CLIENT,
+    OAUTH_SCOPE, base_url,
 };
 use crate::channel::{
     AuthorizationCode, AuthorizationRequest, AuthorizationStart, ChannelError, CredentialRefresh,
     CredentialUpdate, LoginContext, OAuthAuthorizationCode, OAuthCredential, OperationFuture,
     RefreshContext,
 };
-use crate::channels::shared::code_assist::google::{self, GoogleTool};
+use crate::channels::shared::code_assist::google::{self, GoogleTool, Onboarding};
 use gproxy_protocol::capability::CapabilityFuture;
-use serde_json::{Value, json};
+use serde_json::Value;
+use std::time::Duration;
 
-/// `ClientMetadata` for `loadCodeAssist`/`onboardUser`. Antigravity names
-/// itself as the IDE, which is how the Code Assist host distinguishes it
-/// from the Gemini CLI, and it never sends a `duetProject`
-/// (v3 `antigravity/login.rs::metadata`).
-fn metadata(_project: Option<&str>) -> Value {
-    json!({
-        "ideType": "ANTIGRAVITY",
-        "platform": "PLATFORM_UNSPECIFIED",
-        "pluginType": "GEMINI",
-    })
+/// `ClientMetadata` for `loadCodeAssist`/`onboardUser`: the IDE's
+/// `get clientMetadata()` is `{ideName:"antigravity", ideType:ANTIGRAVITY,
+/// ideVersion}` and nothing else (no platform, no plugin type, no
+/// `duetProject`). protobuf-es writes the fields in field-number order:
+/// `ideType` (1), `ideVersion` (2), `ideName` (8), per the
+/// `google.internal.cloud.code.v1internal.ClientMetadata` descriptor
+/// embedded in `main.js` (`FF=Uo("…onboarding.proto…")`).
+fn metadata(_project: Option<&str>) -> String {
+    format!(r#"{{"ideType":"ANTIGRAVITY","ideVersion":"{IDE_VERSION}","ideName":"antigravity"}}"#)
+}
+
+/// CPA's fallback when neither a default allowed tier nor a current tier exists.
+const FREE_TIER: &str = "free-tier";
+
+/// CPA `internal/auth/antigravity/auth.go::defaultAntigravityTierID`:
+/// try the default allowed tier, then the current tier, then `free-tier`.
+/// Ineligibility messages are not a local gate; let `onboardUser` decide.
+fn onboarding(loaded: &Value, _hint: Option<&str>) -> Result<Onboarding, ChannelError> {
+    let tier = google::default_tier(loaded)
+        .map(str::trim)
+        .filter(|tier| !tier.is_empty())
+        .or_else(|| {
+            loaded
+                .pointer("/currentTier/id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|tier| !tier.is_empty())
+        })
+        .unwrap_or(FREE_TIER);
+    Ok(Onboarding::Tier(tier.to_owned()))
 }
 
 fn tool(config: &AntigravityConfig) -> GoogleTool<'_> {
@@ -39,8 +70,38 @@ fn tool(config: &AntigravityConfig) -> GoogleTool<'_> {
         token_url: non_empty(&config.token_url, DEFAULT_TOKEN_URL),
         redirect_uri: DEFAULT_REDIRECT_URI,
         scope: OAUTH_SCOPE,
-        fallback_tier: FALLBACK_TIER,
-        user_agent: super::CLI_USER_AGENT,
+        // The IDE's `getLoginUrl`: `new OAuth2Client(id, secret, redirect)
+        // .generateAuthUrl({access_type:"offline", scope, state,
+        // prompt:"consent"})`; google-auth-library appends `response_type`,
+        // `client_id`, then the constructor's `redirect_uri`. No PKCE: the
+        // exchange is `getToken(code)` alone.
+        authorize_params: &[
+            "access_type",
+            "scope",
+            "state",
+            "prompt",
+            "response_type",
+            "client_id",
+            "redirect_uri",
+        ],
+        auth_library: AUTH_LIBRARY,
+        node_client: NODE_CLIENT,
+        // `makePostRequest` goes through `OAuth2Client.request`, whose
+        // interceptor adds the runtime banner; it sets no `responseType`, so
+        // node-fetch's `Accept: */*` stands.
+        code_assist_api_client: Some(NODE_CLIENT),
+        code_assist_accept: "*/*",
+        // `getProfileData`: the same `request` with only `User-Agent` set.
+        userinfo_headers: &[
+            ("accept", "*/*"),
+            ("user-agent", EDITOR_USER_AGENT),
+            ("x-goog-api-client", NODE_CLIENT),
+        ],
+        onboarding,
+        require_project: false,
+        // The IDE's `_ss=500` between polls of the onboarding operation.
+        onboard_poll: Duration::from_millis(500),
+        user_agent: EDITOR_USER_AGENT,
         metadata,
     }
 }

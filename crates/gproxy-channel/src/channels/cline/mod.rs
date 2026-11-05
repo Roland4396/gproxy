@@ -61,13 +61,13 @@ impl BaseChannel for Cline {
         ChannelDescriptor {
             id: ID,
             display_name: "Cline",
+            credential_kinds: vec!["api_key", "oauth"],
             login_modes: vec![LoginMode::ApiKey, LoginMode::DeviceCode],
             capabilities: ChannelCapabilities {
                 refresh: true,
                 quota_query: true,
-                quota_reset: false,
-                services: false,
-                websocket: false,
+                paid_usage: true,
+                ..Default::default()
             },
             config_keys: [
                 ConfigKey::optional(

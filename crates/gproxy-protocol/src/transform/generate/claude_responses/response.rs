@@ -6,7 +6,7 @@ use crate::{
     },
     wire::{DeclaredFields, claude::generate_content as c, openai::responses as r},
 };
-mod content;
+pub(crate) mod content;
 mod facts;
 pub(crate) mod mcp;
 pub(crate) mod usage;
@@ -136,11 +136,8 @@ fn convert_to_claude(
         ));
     }
     let input = input.into_declared();
-    if input.error.is_some() {
-        return Err(TransformError::invalid_result(
-            "response.error",
-            "upstream response contains an error",
-        ));
+    if let Some(error) = input.error {
+        return Err(TransformError::upstream("response.error", error));
     }
     let completed = match input.status {
         Some(r::ResponseStatus::Completed) => true,

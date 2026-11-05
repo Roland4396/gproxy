@@ -10,8 +10,7 @@
 
 use crate::channel::{
     BaseChannel, ChannelCapabilities, ChannelDescriptor, ChannelError, ConfigKey, ConfigKeyKind,
-    HOST_CONFIG_KEYS, HeaderAllowlist, LoginMode, PrepareContext, ProviderView,
-    forwardable,
+    HOST_CONFIG_KEYS, HeaderAllowlist, LoginMode, PrepareContext, ProviderView, forwardable,
 };
 use crate::channels::shared::cache;
 use gproxy_protocol::{Dialect, HttpBody, Operation, WireFamily, WireRequest};
@@ -19,7 +18,7 @@ use http::{HeaderName, HeaderValue, header};
 use serde::Deserialize;
 
 pub const ID: &str = "custom";
-const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+const DEFAULT_ANTHROPIC_VERSION: &str = gproxy_protocol::claude::API_VERSION;
 
 /// Provider `config` JSON understood by this channel. Unknown keys are ignored.
 #[derive(Debug, Default, Deserialize)]
@@ -29,7 +28,7 @@ pub struct CustomConfig {
     pub fallback_models: Vec<String>,
     /// Dialects the upstream accepts. Empty means the
     /// canonical dialect of every family (`openai`, `claude`, `gemini`) plus
-    /// `openai_chat`, i.e. "whatever the client sends, forward it".
+    /// `openai_chat` and `gemini_interactions`, i.e. "whatever the client sends, forward it".
     pub dialects: Vec<Dialect>,
     /// Override the authentication header for every family, e.g. an
     /// OpenAI-compatible vendor that wants `api-key`.
@@ -120,9 +119,6 @@ impl Custom {
                     HeaderName::from_static("x-api-key"),
                     HeaderValue::from_str(key).map_err(|_| ChannelError::InvalidCredential)?,
                 );
-                headers
-                    .entry(HeaderName::from_static("anthropic-version"))
-                    .or_insert_with(|| HeaderValue::from_static(DEFAULT_ANTHROPIC_VERSION));
             }
             (None, WireFamily::Gemini) => {
                 headers.insert(
@@ -130,6 +126,12 @@ impl Custom {
                     HeaderValue::from_str(key).map_err(|_| ChannelError::InvalidCredential)?,
                 );
             }
+        }
+        if family == WireFamily::Claude {
+            headers.insert(
+                HeaderName::from_static("anthropic-version"),
+                HeaderValue::from_static(DEFAULT_ANTHROPIC_VERSION),
+            );
         }
         for (name, value) in &config.headers {
             headers.insert(
@@ -159,6 +161,7 @@ impl BaseChannel for Custom {
         ChannelDescriptor {
             id: ID,
             display_name: "Custom (API key)",
+            credential_kinds: vec!["api_key"],
             login_modes: vec![LoginMode::ApiKey],
             capabilities: ChannelCapabilities::default(),
             config_keys: [
@@ -170,7 +173,7 @@ impl BaseChannel for Custom {
                 ConfigKey::optional(
                     "dialects",
                     ConfigKeyKind::Json,
-                    "Wire dialects the upstream accepts natively. Empty accepts openai, openai_chat, claude and gemini.",
+                    "Wire dialects the upstream accepts natively. Empty accepts openai, openai_chat, claude, gemini and gemini_interactions.",
                 ),
                 ConfigKey::optional(
                     "auth_header",
@@ -215,6 +218,7 @@ impl BaseChannel for Custom {
                 Dialect::OpenAiChat,
                 Dialect::Claude,
                 Dialect::Gemini,
+                Dialect::GeminiInteractions,
             ]
         } else {
             configured
@@ -236,7 +240,10 @@ impl BaseChannel for Custom {
             HttpBody::Bytes(bytes) => {
                 let bytes = cache::shape(bytes, rules);
                 if operation.dialect == Dialect::Claude
-                    && matches!(operation.operation, Operation::GenerateContent | Operation::StreamGenerateContent)
+                    && matches!(
+                        operation.operation,
+                        Operation::GenerateContent | Operation::StreamGenerateContent
+                    )
                     && let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 {
                     // `None` when the builder already holds an error, such as a
@@ -245,12 +252,16 @@ impl BaseChannel for Custom {
                         ChannelError::InvalidConfig("custom request could not be built".into())
                     })?;
                     crate::channels::shared::claude_fallback::fallbacks(
-                        &mut body, headers,
-                        &config.fallback_mode, &config.fallback_models,
+                        &mut body,
+                        headers,
+                        &config.fallback_mode,
+                        &config.fallback_models,
                     );
                     HttpBody::Bytes(gproxy_protocol::connection::Bytes::from(body.to_string()))
-                } else { HttpBody::Bytes(bytes) }
-            },
+                } else {
+                    HttpBody::Bytes(bytes)
+                }
+            }
             other => other,
         };
         builder

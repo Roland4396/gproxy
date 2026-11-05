@@ -1,7 +1,8 @@
 //! How a WorkBuddy credential comes into existence and how it stays alive.
 //!
 //! The plugin's login is a device flow without a user code (v3 `login.rs`):
-//! `POST /v2/plugin/auth/state?platform=workbuddy` returns a `state` and the
+//! `POST /v2/plugin/auth/state?platform=workbuddy` (or `workbuddy-ai` for the
+//! international service) returns a `state` and the
 //! `authUrl` to open, `GET /v2/plugin/auth/token?state=…` answers envelope
 //! code 11217 until the browser is done and then the tokens, and
 //! `GET /v2/plugin/login/account?state=…` answers 12151 until the account is
@@ -18,12 +19,13 @@
 //! `provider_fields`, so `prepare` reads it back from the credential's
 //! metadata and never goes looking.
 
-use super::config::{ID, WorkBuddyConfig, base_url};
+use super::config::{ID, WorkBuddyConfig};
 use super::envelope::{self, ACCOUNT_PENDING, AUTH_PENDING};
 use super::{encode_component, json_headers, send, unix_now_ms};
 use crate::channel::{
-    ChannelError, CredentialRefresh, CredentialUpdate, DeviceAuthorization, DevicePoll,
-    LoginContext, OAuthCredential, OAuthDeviceCode, OperationFuture, RefreshContext,
+    ChannelError, CredentialRefresh, CredentialUpdate, CredentialView, DeviceAuthorization,
+    DevicePoll, LoginContext, OAuthCredential, OAuthDeviceCode, OperationFuture, RefreshContext,
+    RefreshReason,
 };
 use http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use serde::Deserialize;
@@ -32,6 +34,14 @@ use std::collections::BTreeMap;
 
 /// What the upstream grants when it does not say (v3 `login.rs`).
 const DEFAULT_EXPIRES_IN_SECS: i64 = 3_600;
+/// When the last token was issued, in unix milliseconds, under the sealed
+/// `provider_secrets` pocket (the plugin's `auth.lastRefreshTime`).
+const LAST_REFRESH_MS: &str = "last_refresh_ms";
+/// The plugin's refresh cadence (`AuthenticationManagerImpl
+/// .scheduleRefreshSession`): once a day, or every five minutes once the
+/// token's expiry is unknown or less than a day away.
+const DAY_MS: i64 = 86_400_000;
+const NEAR_EXPIRY_INTERVAL_MS: i64 = 300_000;
 /// The browser step is a redirect, not a code a person types.
 const NO_USER_CODE: &str = "No code required";
 
@@ -108,15 +118,74 @@ fn login_headers() -> http::HeaderMap {
     headers
 }
 
+/// The opt-outs the plugin writes on its pre-session calls
+/// (`ExternalLinkAuthenticationProvider`): its interceptor reads them and
+/// leaves them on the wire. `auth/state` and the token poll send all four;
+/// the account poll, which carries a bearer, omits the first.
+fn opt_out(headers: &mut http::HeaderMap, with_authorization: bool) {
+    let names: &[&'static str] = if with_authorization {
+        &[
+            "x-no-authorization",
+            "x-no-user-id",
+            "x-no-enterprise-id",
+            "x-no-department-info",
+        ]
+    } else {
+        &["x-no-user-id", "x-no-enterprise-id", "x-no-department-info"]
+    };
+    for name in names {
+        headers.insert(
+            HeaderName::from_static(name),
+            HeaderValue::from_static("true"),
+        );
+    }
+}
+
+/// `X-Domain` as the plugin's `enterpriseHeaders` sends it: the token's
+/// domain, else the authority of the endpoint being called.
+fn domain_header(
+    headers: &mut http::HeaderMap,
+    domain: Option<&str>,
+    base: &str,
+) -> Result<(), ChannelError> {
+    let name = HeaderName::from_static("x-domain");
+    let domain = domain
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            base.parse::<http::Uri>()
+                .ok()?
+                .authority()
+                .map(|authority| authority.as_str().to_owned())
+        });
+    if let Some(domain) = domain {
+        headers.insert(
+            name,
+            HeaderValue::from_str(&domain).map_err(|_| ChannelError::InvalidCredential)?,
+        );
+    }
+    Ok(())
+}
+
 impl OAuthDeviceCode for super::WorkBuddy {
     fn start<'a>(&'a self, context: LoginContext<'a>) -> OperationFuture<'a, DeviceAuthorization> {
         Box::pin(async move {
-            let base = base_url(context.provider);
+            let config = WorkBuddyConfig::from_view(context.provider)?;
+            let base = config.base_url(context.provider);
             let (status, _, body) = send(
                 context.client,
                 Method::POST,
-                &format!("{base}/v2/plugin/auth/state?platform=workbuddy"),
-                login_headers(),
+                &format!(
+                    "{base}/v2/plugin/auth/state?platform={}",
+                    config.login_platform()
+                ),
+                {
+                    let mut headers = login_headers();
+                    domain_header(&mut headers, None, &base)?;
+                    opt_out(&mut headers, true);
+                    headers
+                },
                 Some(b"{}".to_vec()),
             )
             .await?;
@@ -146,13 +215,18 @@ impl OAuthDeviceCode for super::WorkBuddy {
         authorization: &'a DeviceAuthorization,
     ) -> OperationFuture<'a, DevicePoll> {
         Box::pin(async move {
-            let base = base_url(context.provider);
+            let config = WorkBuddyConfig::from_view(context.provider)?;
+            let base = config.base_url(context.provider);
             let state = encode_component(&authorization.device_code);
             let (status, _, body) = send(
                 context.client,
                 Method::GET,
                 &format!("{base}/v2/plugin/auth/token?state={state}"),
-                login_headers(),
+                {
+                    let mut headers = login_headers();
+                    opt_out(&mut headers, true);
+                    headers
+                },
                 None,
             )
             .await?;
@@ -171,12 +245,8 @@ impl OAuthDeviceCode for super::WorkBuddy {
                 HeaderValue::from_str(&format!("Bearer {}", tokens.access_token))
                     .map_err(|_| ChannelError::InvalidCredential)?,
             );
-            if let Some(domain) = tokens.domain.as_deref().filter(|d| !d.trim().is_empty()) {
-                headers.insert(
-                    HeaderName::from_static("x-domain"),
-                    HeaderValue::from_str(domain).map_err(|_| ChannelError::InvalidCredential)?,
-                );
-            }
+            domain_header(&mut headers, tokens.domain.as_deref(), &base)?;
+            opt_out(&mut headers, false);
             let (status, _, body) = send(
                 context.client,
                 Method::GET,
@@ -220,16 +290,55 @@ impl OAuthDeviceCode for super::WorkBuddy {
                     .or_else(|| relative(Some(DEFAULT_EXPIRES_IN_SECS))),
                 refresh_expires_at_ms: tokens.refresh_expires_at_ms(),
                 provider_fields: fields,
-                provider_secrets: BTreeMap::new(),
+                provider_secrets: BTreeMap::from([(
+                    LAST_REFRESH_MS.to_owned(),
+                    Value::from(unix_now_ms()),
+                )]),
             }))
         })
     }
 }
 
 impl CredentialRefresh for super::WorkBuddy {
+    /// The plugin's schedule rather than the default margin: it refreshes a
+    /// day after the last refresh, and every five minutes when the expiry is
+    /// unknown or within a day, so a token whose lifetime the gateway never
+    /// stated is still renewed before a 401 logs the account out. A
+    /// credential with no recorded refresh counts as never refreshed, as the
+    /// plugin's `lastRefreshTime || 0` does.
+    fn proactive_refresh_reason(
+        &self,
+        credential: CredentialView<'_>,
+        now_ms: i64,
+    ) -> Option<RefreshReason> {
+        let refreshable = credential
+            .secret
+            .get("refresh_token")
+            .and_then(Value::as_str)
+            .is_some_and(|token| !token.trim().is_empty());
+        if !refreshable {
+            return None;
+        }
+        let expires = credential.expires_at_ms;
+        if expires.is_some_and(|expires| expires <= now_ms.saturating_add(NEAR_EXPIRY_INTERVAL_MS))
+        {
+            return Some(RefreshReason::ProactiveExpiry);
+        }
+        let interval = match expires {
+            Some(expires) if expires.saturating_sub(DAY_MS) >= now_ms => DAY_MS,
+            _ => NEAR_EXPIRY_INTERVAL_MS,
+        };
+        let last_refresh = credential
+            .secret
+            .pointer(&format!("/provider_secrets/{LAST_REFRESH_MS}"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        (last_refresh.saturating_add(interval) < now_ms).then_some(RefreshReason::Scheduled)
+    }
+
     fn refresh<'a>(&'a self, context: RefreshContext<'a>) -> OperationFuture<'a, CredentialUpdate> {
         Box::pin(async move {
-            let _ = WorkBuddyConfig::from_view(context.provider)?;
+            let config = WorkBuddyConfig::from_view(context.provider)?;
             let secret = context.credential.secret;
             let refresh_token = secret
                 .get("refresh_token")
@@ -249,19 +358,26 @@ impl CredentialRefresh for super::WorkBuddy {
                 HeaderName::from_static("x-auth-refresh-source"),
                 HeaderValue::from_static("plugin"),
             );
-            if let Some(domain) = super::auth::fact(&context.credential, "domain") {
+            // The refresh goes out with the session the plugin is renewing,
+            // so its interceptor adds the bearer and the account facts.
+            if let Ok(access) = super::auth::access_token(&context.credential) {
                 headers.insert(
-                    HeaderName::from_static("x-domain"),
-                    HeaderValue::from_str(domain).map_err(|_| ChannelError::InvalidCredential)?,
+                    header::AUTHORIZATION,
+                    HeaderValue::from_str(&format!("Bearer {access}"))
+                        .map_err(|_| ChannelError::InvalidCredential)?,
                 );
             }
+            super::auth::account_headers(&mut headers, &context.credential)?;
+            let base = config.base_url(context.provider);
+            domain_header(
+                &mut headers,
+                super::auth::fact(&context.credential, "domain"),
+                &base,
+            )?;
             let (status, _, body) = send(
                 context.client,
                 Method::POST,
-                &format!(
-                    "{}/v2/plugin/auth/token/refresh",
-                    base_url(context.provider)
-                ),
+                &format!("{base}/v2/plugin/auth/token/refresh"),
                 headers,
                 Some(b"{}".to_vec()),
             )
@@ -282,6 +398,14 @@ impl CredentialRefresh for super::WorkBuddy {
             let wrapped = envelope::parse::<Tokens>(&body, "token refresh")?;
             let code = wrapped.code;
             let message = wrapped.msg.clone();
+            // The plugin logs out on an envelope code 401 answered to a call
+            // carrying its token (`AuthenticationHttpInterceptor.checkToLogout`),
+            // so that refusal ends the grant as surely as an HTTP 401.
+            if code == 401 {
+                return Err(ChannelError::RefreshRejected(format!(
+                    "envelope 401: {message}"
+                )));
+            }
             let tokens = wrapped.data("token refresh").map_err(|error| {
                 if code == AUTH_PENDING {
                     ChannelError::InvalidResponse(format!("{ID} refresh: {message} ({code})"))
@@ -326,6 +450,12 @@ impl CredentialRefresh for super::WorkBuddy {
             if let Some(expires) = tokens.refresh_expires_at_ms() {
                 object.insert("refresh_expires_at_ms".into(), Value::from(expires));
             }
+            let secrets = object
+                .entry("provider_secrets")
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Some(secrets) = secrets.as_object_mut() {
+                secrets.insert(LAST_REFRESH_MS.into(), Value::from(unix_now_ms()));
+            }
             if let Some(domain) = tokens.domain.as_deref().filter(|d| !d.trim().is_empty()) {
                 let fields = object
                     .entry("provider_fields")
@@ -335,6 +465,7 @@ impl CredentialRefresh for super::WorkBuddy {
                 }
             }
             Ok(CredentialUpdate {
+                metadata: None,
                 secret: updated,
                 expires_at_ms,
             })

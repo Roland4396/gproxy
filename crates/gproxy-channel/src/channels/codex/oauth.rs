@@ -5,14 +5,18 @@ use super::{Codex, CodexConfig, DEFAULT_CLIENT_ID};
 use crate::OutboundClient;
 use crate::channel::{
     AuthorizationCode, AuthorizationRequest, AuthorizationStart, ChannelError, CredentialRefresh,
-    CredentialUpdate, DeviceAuthorization, DevicePoll, LoginContext, OAuthAuthorizationCode,
-    OAuthCredential, OAuthDeviceCode, OperationFuture, RefreshContext,
+    CredentialUpdate, CredentialView, DeviceAuthorization, DevicePoll, LoginContext,
+    OAuthAuthorizationCode, OAuthCredential, OAuthDeviceCode, OperationFuture, RefreshContext,
+    RefreshReason,
 };
+use crate::channels::shared::services_common::unix_now_ms;
 use base64::Engine;
-use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+
+const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:1455/auth/callback";
 
 const OAUTH_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
@@ -46,6 +50,8 @@ fn provider_fields(id_token: Option<&str>) -> BTreeMap<String, Value> {
             ("chatgpt_account_id", "chatgpt_account_id"),
             ("chatgpt_plan_type", "chatgpt_plan_type"),
             ("chatgpt_user_id", "chatgpt_user_id"),
+            // Routes the workspace through the FedRAMP edge (token_data.rs).
+            ("chatgpt_account_is_fedramp", "chatgpt_account_is_fedramp"),
         ] {
             if let Some(value) = auth.get(from).filter(|v| !v.is_null()) {
                 fields.insert(to.to_owned(), value.clone());
@@ -75,7 +81,7 @@ fn credential_from_tokens(
     OAuthCredential {
         expires_at_ms: jwt_expiry_ms(&access_token),
         provider_fields: provider_fields(id_token.as_deref()),
-        provider_secrets: BTreeMap::new(),
+        provider_secrets: BTreeMap::from([("last_refresh_ms".into(), json!(unix_now_ms()))]),
         access_token,
         refresh_token,
         id_token,
@@ -132,14 +138,18 @@ struct TokenResponse {
     id_token: Option<String>,
 }
 
-/// The token endpoint's error code, at `error.code`, `error` or `code`.
+/// The token endpoint's error code: the first non-empty of `error`,
+/// `error.code` and top-level `code` (login/src/oauth/error.rs).
 fn token_error_code(body: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(body).ok()?;
-    match value.get("error") {
-        Some(Value::Object(error)) => error.get("code").and_then(Value::as_str).map(str::to_owned),
-        Some(Value::String(code)) => Some(code.clone()),
-        _ => value.get("code").and_then(Value::as_str).map(str::to_owned),
-    }
+    let text = |v: Option<&Value>| {
+        v.and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+    };
+    text(value.get("error"))
+        .or_else(|| text(value.pointer("/error/code")))
+        .or_else(|| text(value.get("code")))
 }
 
 async fn exchange_code(
@@ -150,11 +160,12 @@ async fn exchange_code(
     code_verifier: &str,
 ) -> Result<OAuthCredential, ChannelError> {
     let url = format!("{}/oauth/token", config.issuer.trim_end_matches('/'));
+    // Field order of login/src/oauth/client.rs `exchange_code`.
     let body = form_encode(&[
         ("grant_type", "authorization_code"),
+        ("client_id", DEFAULT_CLIENT_ID),
         ("code", code),
         ("redirect_uri", redirect_uri),
-        ("client_id", DEFAULT_CLIENT_ID),
         ("code_verifier", code_verifier),
     ]);
     let (status, _, bytes) = send_json(
@@ -192,16 +203,22 @@ impl OAuthAuthorizationCode for Codex {
     ) -> OperationFuture<'a, AuthorizationStart> {
         Box::pin(async move {
             let config = CodexConfig::from_view(context.provider)?;
+            let redirect_uri = match request.redirect_uri.trim() {
+                "" => DEFAULT_REDIRECT_URI,
+                _ => request.redirect_uri,
+            };
+            // Parameter order of login/src/oauth/authorization.rs, then
+            // the extra parameters of server.rs `build_authorize_url`.
             let query = form_encode(&[
                 ("response_type", "code"),
                 ("client_id", DEFAULT_CLIENT_ID),
-                ("redirect_uri", request.redirect_uri),
-                ("scope", OAUTH_SCOPE),
+                ("redirect_uri", redirect_uri),
                 ("code_challenge", request.code_challenge),
                 ("code_challenge_method", "S256"),
+                ("state", request.state),
+                ("scope", OAUTH_SCOPE),
                 ("id_token_add_organizations", "true"),
                 ("codex_cli_simplified_flow", "true"),
-                ("state", request.state),
                 ("originator", &config.originator),
             ]);
             Ok(AuthorizationStart {
@@ -209,7 +226,7 @@ impl OAuthAuthorizationCode for Codex {
                     "{}/oauth/authorize?{query}",
                     config.issuer.trim_end_matches('/')
                 ),
-                redirect_uri: request.redirect_uri.to_owned(),
+                redirect_uri: redirect_uri.to_owned(),
                 // The exchange needs nothing this call learned.
                 provider_state: BTreeMap::new(),
             })
@@ -320,14 +337,10 @@ impl OAuthDeviceCode for Codex {
                 ),
             )
             .await?;
+            // As device_code_auth.rs `poll_for_token`: 403 and 404 mean
+            // pending, any other failure ends the login.
             match status {
                 StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => return Ok(DevicePoll::Pending),
-                StatusCode::TOO_MANY_REQUESTS => {
-                    return Ok(DevicePoll::SlowDown {
-                        interval_secs: authorization.interval_secs.saturating_mul(2).max(5),
-                    });
-                }
-                StatusCode::GONE => return Ok(DevicePoll::Expired),
                 status if !status.is_success() => {
                     return Err(ChannelError::UpstreamResponse {
                         status,
@@ -352,7 +365,52 @@ impl OAuthDeviceCode for Codex {
 }
 
 impl CredentialRefresh for Codex {
+    fn proactive_refresh_reason(
+        &self,
+        credential: CredentialView<'_>,
+        now_ms: i64,
+    ) -> Option<RefreshReason> {
+        // Match login/src/auth/manager.rs: JWT expiry takes precedence over
+        // the eight-day fallback, which is only for tokens without an expiry.
+        if let Some(expires) = credential
+            .secret
+            .get("access_token")
+            .and_then(Value::as_str)
+            .and_then(jwt_expiry_ms)
+        {
+            return (expires <= now_ms.saturating_add(300_000))
+                .then_some(RefreshReason::ProactiveExpiry);
+        }
+        let last_refresh = credential
+            .secret
+            .pointer("/provider_secrets/last_refresh_ms")
+            .and_then(Value::as_i64)
+            .or_else(|| {
+                // Also accept the timestamp from an imported Codex auth.json.
+                let value = credential.secret.get("last_refresh")?.as_str()?;
+                let timestamp = time::OffsetDateTime::parse(
+                    value,
+                    &time::format_description::well_known::Rfc3339,
+                )
+                .ok()?;
+                i64::try_from(timestamp.unix_timestamp_nanos() / 1_000_000).ok()
+            })?;
+        (last_refresh < now_ms.saturating_sub(8 * 86_400_000)).then_some(RefreshReason::Scheduled)
+    }
+
+    fn persist_rejection(&self, _reason: &str) -> bool {
+        false
+    }
+
     fn refresh<'a>(&'a self, context: RefreshContext<'a>) -> OperationFuture<'a, CredentialUpdate> {
+        self.refresh_with_reason(context, RefreshReason::Forced)
+    }
+
+    fn refresh_with_reason<'a>(
+        &'a self,
+        context: RefreshContext<'a>,
+        reason: RefreshReason,
+    ) -> OperationFuture<'a, CredentialUpdate> {
         Box::pin(async move {
             let config = CodexConfig::from_view(context.provider)?;
             let secret = context.credential.secret;
@@ -368,12 +426,32 @@ impl CredentialRefresh for Codex {
                 "client_id": DEFAULT_CLIENT_ID,
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
+                "refresh_reason": match reason {
+                    RefreshReason::ProactiveExpiry => "proactive_expiry",
+                    RefreshReason::Scheduled => "scheduled",
+                    RefreshReason::UnauthorizedRecovery => "unauthorized_recovery",
+                    RefreshReason::Forced => "forced",
+                },
             });
+            // The CLI refreshes through its default auth client, which adds
+            // `originator` and `User-Agent` (login/src/auth/default_client.rs
+            // `default_headers`); code exchange and device code do not.
+            let mut headers = json_headers();
+            headers.insert(
+                HeaderName::from_static("originator"),
+                HeaderValue::from_str(&config.originator)
+                    .map_err(|_| ChannelError::InvalidConfig("originator".into()))?,
+            );
+            headers.insert(
+                header::USER_AGENT,
+                HeaderValue::from_str(&super::agent::user_agent(&config.originator))
+                    .map_err(|_| ChannelError::InvalidConfig("originator".into()))?,
+            );
             let (status, _, bytes) = send_json(
                 context.client,
                 Method::POST,
                 &url,
-                json_headers(),
+                headers,
                 Some(body.to_string().into_bytes()),
             )
             .await?;
@@ -402,34 +480,47 @@ impl CredentialRefresh for Codex {
             }
             let tokens: TokenResponse =
                 serde_json::from_slice(&bytes).map_err(|e| invalid_response(e.to_string()))?;
-            let access_token = tokens
-                .access_token
-                .filter(|t| !t.is_empty())
-                .ok_or_else(|| invalid_response("refresh returned no access_token"))?;
-            let refresh_token = tokens
-                .refresh_token
-                .filter(|t| !t.is_empty())
-                .or_else(|| Some(refresh_token.to_owned()));
-            let id_token = tokens.id_token.filter(|t| !t.is_empty()).or_else(|| {
-                secret
-                    .get("id_token")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            });
-            let mut credential = credential_from_tokens(access_token, refresh_token, id_token);
-            // Keep account facts a login recorded that the new id token lacks.
-            if let Some(Value::Object(previous)) = secret.get("provider_fields") {
-                for (key, value) in previous {
-                    credential
-                        .provider_fields
-                        .entry(key.clone())
-                        .or_insert_with(|| value.clone());
+            // A successful response may rotate only some tokens. Preserve all
+            // other material, including a refresh token omitted by the issuer.
+            let mut secret = secret.clone();
+            for (key, token) in [
+                ("access_token", tokens.access_token),
+                ("refresh_token", tokens.refresh_token),
+                ("id_token", tokens.id_token),
+            ] {
+                if let Some(token) = token {
+                    secret[key] = Value::String(token);
                 }
             }
-            let expires_at_ms = credential.expires_at_ms;
-            let secret =
-                serde_json::to_value(&credential).map_err(|e| invalid_response(e.to_string()))?;
+            let expires_at_ms = secret
+                .get("access_token")
+                .and_then(Value::as_str)
+                .and_then(jwt_expiry_ms);
+            secret["expires_at_ms"] = json!(expires_at_ms);
+            let mut fields = secret
+                .get("provider_fields")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            // The login's account stays: the CLI's TokenData.account_id is
+            // set at login and never rewritten by a refresh (persist_tokens).
+            let login_account = fields.get("chatgpt_account_id").cloned();
+            fields.extend(provider_fields(
+                secret.get("id_token").and_then(Value::as_str),
+            ));
+            if let Some(account) = login_account {
+                fields.insert("chatgpt_account_id".into(), account);
+            }
+            secret["provider_fields"] = Value::Object(fields);
+            let mut provider_secrets = secret
+                .get("provider_secrets")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            provider_secrets.insert("last_refresh_ms".into(), json!(unix_now_ms()));
+            secret["provider_secrets"] = Value::Object(provider_secrets);
             Ok(CredentialUpdate {
+                metadata: None,
                 secret,
                 expires_at_ms,
             })

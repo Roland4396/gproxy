@@ -11,6 +11,7 @@ use gproxy_store::entity::pricing::{price_rate, price_rule, price_tier, price_un
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceRuleDto {
     pub id: String,
     /// None prices every provider; a provider rule wins over a global one.
@@ -43,6 +44,7 @@ impl From<price_rule::Model> for PriceRuleDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceRuleWrite {
     #[serde(default)]
     pub id: Option<String>,
@@ -62,6 +64,7 @@ pub struct PriceRuleWrite {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceRulePatch {
     #[serde(default, deserialize_with = "double_option")]
     pub provider_id: Option<Option<String>>,
@@ -83,6 +86,7 @@ pub struct PriceRulePatch {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceRateDto {
     pub id: String,
     pub price_rule_id: String,
@@ -126,6 +130,7 @@ pub(crate) fn unit_name(unit: PriceUnit) -> &'static str {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceRateWrite {
     #[serde(default)]
     pub id: Option<String>,
@@ -145,6 +150,7 @@ pub struct PriceRateWrite {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceRatePatch {
     #[serde(default)]
     pub metric: Option<String>,
@@ -167,6 +173,7 @@ pub struct PriceRatePatch {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceTierDto {
     pub id: String,
     pub price_rule_id: String,
@@ -178,9 +185,8 @@ pub struct PriceTierDto {
     pub input_per_million: Option<String>,
     pub output_per_million: Option<String>,
     pub cache_read_per_million: Option<String>,
-    pub cache_creation_5m_per_million: Option<String>,
-    pub cache_creation_30m_per_million: Option<String>,
-    pub cache_creation_1h_per_million: Option<String>,
+    #[serde(default)]
+    pub cache_creation_per_million: Vec<CacheCreationPriceDto>,
     pub reasoning_per_million: Option<String>,
     pub image_input_per_million: Option<String>,
     pub image_output_per_million: Option<String>,
@@ -204,9 +210,10 @@ impl From<price_tier::Model> for PriceTierDto {
             input_per_million: text(row.input_per_million),
             output_per_million: text(row.output_per_million),
             cache_read_per_million: text(row.cache_read_per_million),
-            cache_creation_5m_per_million: text(row.cache_creation_5m_per_million),
-            cache_creation_30m_per_million: text(row.cache_creation_30m_per_million),
-            cache_creation_1h_per_million: text(row.cache_creation_1h_per_million),
+            cache_creation_per_million: row
+                .cache_creation_per_million
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default(),
             reasoning_per_million: text(row.reasoning_per_million),
             image_input_per_million: text(row.image_input_per_million),
             image_output_per_million: text(row.image_output_per_million),
@@ -223,6 +230,7 @@ impl From<price_tier::Model> for PriceTierDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceTierWrite {
     #[serde(default)]
     pub id: Option<String>,
@@ -242,11 +250,7 @@ pub struct PriceTierWrite {
     #[serde(default)]
     pub cache_read_per_million: Option<String>,
     #[serde(default)]
-    pub cache_creation_5m_per_million: Option<String>,
-    #[serde(default)]
-    pub cache_creation_30m_per_million: Option<String>,
-    #[serde(default)]
-    pub cache_creation_1h_per_million: Option<String>,
+    pub cache_creation_per_million: Vec<CacheCreationPriceDto>,
     #[serde(default)]
     pub reasoning_per_million: Option<String>,
     #[serde(default)]
@@ -269,6 +273,7 @@ pub struct PriceTierWrite {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PriceTierPatch {
     #[serde(default, deserialize_with = "double_option")]
     pub service_tier: Option<Option<String>>,
@@ -284,12 +289,8 @@ pub struct PriceTierPatch {
     pub output_per_million: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
     pub cache_read_per_million: Option<Option<String>>,
-    #[serde(default, deserialize_with = "double_option")]
-    pub cache_creation_5m_per_million: Option<Option<String>>,
-    #[serde(default, deserialize_with = "double_option")]
-    pub cache_creation_30m_per_million: Option<Option<String>>,
-    #[serde(default, deserialize_with = "double_option")]
-    pub cache_creation_1h_per_million: Option<Option<String>>,
+    #[serde(default)]
+    pub cache_creation_per_million: Option<Vec<CacheCreationPriceDto>>,
     #[serde(default, deserialize_with = "double_option")]
     pub reasoning_per_million: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
@@ -306,4 +307,16 @@ pub struct PriceTierPatch {
     pub video_input_per_million: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
     pub video_per_million: Option<Option<String>>,
+}
+
+/// A cache-write price per million tokens. No TTL is the fallback price.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CacheCreationPriceDto {
+    #[serde(default, alias = "ttl_seconds")]
+    pub ttl_seconds: Option<u64>,
+    pub price: String,
 }

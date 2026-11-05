@@ -1,0 +1,411 @@
+use super::{
+    OrcaTerm,
+    config::{OrcaTermConfig, invalid, new_id, now_ms},
+    request,
+};
+use crate::channels::shared::compatible::http::read_body;
+use crate::{
+    OutboundClient,
+    channel::{
+        ChannelError, CredentialRefresh, CredentialUpdate, CredentialView, OAuthCredential,
+        OperationFuture, RefreshContext, RefreshReason,
+    },
+};
+use base64::Engine as _;
+use gproxy_protocol::HttpBody;
+use http::{HeaderMap, HeaderValue, Method, header};
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+
+fn cookie_value<'a>(cookie: &'a str, key: &str) -> Option<&'a str> {
+    let cookie = cookie.trim();
+    let cookie = cookie
+        .split_once(':')
+        .filter(|(name, _)| name.trim().eq_ignore_ascii_case("cookie"))
+        .map_or(cookie, |(_, value)| value.trim());
+    cookie
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .find_map(|(name, value)| (name == key && !value.trim().is_empty()).then_some(value.trim()))
+}
+
+pub(super) fn token(secret: &Value) -> Result<&str, ChannelError> {
+    secret
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| cookie_value(secret.get("cookie")?.as_str()?, "ot_session"))
+        .ok_or(ChannelError::InvalidCredential)
+}
+
+fn skey(secret: &Value) -> Option<&str> {
+    secret
+        .pointer("/provider_secrets/skey")
+        .and_then(Value::as_str)
+        .or_else(|| cookie_value(secret.get("cookie")?.as_str()?, "skey"))
+}
+
+pub(super) fn fact<'a>(credential: CredentialView<'a>, key: &str) -> Option<&'a str> {
+    credential
+        .secret
+        .get("provider_fields")
+        .and_then(|v| v.get(key))
+        .or_else(|| credential.metadata.get(key))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
+pub(super) fn csrf(secret: &Value) -> String {
+    let Some(skey) = skey(secret).filter(|s| !s.is_empty()) else {
+        return String::new();
+    };
+    let hash = skey.encode_utf16().fold(5381u32, |hash, ch| {
+        hash.wrapping_mul(33).wrapping_add(u32::from(ch))
+    });
+    (hash & 0x7fff_ffff).to_string()
+}
+
+/// This credential's session and optional CSRF cookie, never the caller's.
+fn cookie(secret: &Value) -> Result<HeaderValue, ChannelError> {
+    let token = token(secret)?;
+    if token.contains([';', '\r', '\n']) {
+        return Err(ChannelError::InvalidCredential);
+    }
+    let mut cookie = format!("ot_session={token}");
+    if let Some(skey) = skey(secret) {
+        if skey.contains([';', '\r', '\n']) {
+            return Err(ChannelError::InvalidCredential);
+        }
+        cookie.push_str(&format!("; skey={skey}"));
+    }
+    HeaderValue::from_str(&cookie).map_err(|_| ChannelError::InvalidCredential)
+}
+
+pub(super) fn headers(secret: &Value) -> Result<HeaderMap, ChannelError> {
+    let token = token(secret)?;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| ChannelError::InvalidCredential)?,
+    );
+    headers.insert(header::COOKIE, cookie(secret)?);
+    headers.insert("x-product", HeaderValue::from_static("orcaterm"));
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    Ok(headers)
+}
+
+pub(super) async fn rpc(
+    client: &dyn OutboundClient,
+    config: &OrcaTermConfig,
+    secret: &Value,
+    action: &str,
+    data: Value,
+) -> Result<Value, ChannelError> {
+    let response = rpc_response(client, config, Some(secret), action, data).await?;
+    check_response(action, &response)?;
+    Ok(response)
+}
+
+/// The unauthenticated OAuth exchange uses the same RPC envelope. Keep its
+/// pending error available to the login flow rather than classifying it as a
+/// rejected account or requiring an existing token before acquiring one.
+pub(super) async fn rpc_response(
+    client: &dyn OutboundClient,
+    config: &OrcaTermConfig,
+    secret: Option<&Value>,
+    action: &str,
+    data: Value,
+) -> Result<Value, ChannelError> {
+    let site = config.site_url();
+    let mut url = url::Url::parse(&format!("{site}/cgi/api"))
+        .map_err(|e| ChannelError::InvalidConfig(e.to_string()))?;
+    url.query_pairs_mut().append_pair("action", action);
+    // The desktop's account RPCs carry the verified account identifiers in
+    // the query as well as the session cookie (app.js, otApiRequest).
+    if let Some(secret) = secret {
+        for (key, parameter) in [("uin", "uin"), ("owner_uin", "ownerUin")] {
+            if let Some(value) = secret
+                .get("provider_fields")
+                .and_then(|fields| fields.get(key))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+            {
+                url.query_pairs_mut().append_pair(parameter, value);
+            }
+        }
+    }
+    // The desktop's otApiRequest is an XHR the Tauri shim sends with only the
+    // document cookie (app.js:2961, http-interceptor.js:737): no bearer and
+    // no X-Product, unlike its fetch-based calls.
+    let mut headers = request::configured_headers(config)?;
+    headers.remove(header::AUTHORIZATION);
+    headers.remove(header::COOKIE);
+    headers.remove("x-product");
+    if let Some(secret) = secret {
+        headers.insert(header::COOKIE, cookie(secret)?);
+    }
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+    request::insert(&mut headers, "x-seqid", &new_id()?)?;
+    request::insert(
+        &mut headers,
+        "x-csrfcode",
+        &secret.map(csrf).unwrap_or_default(),
+    )?;
+    request::insert(&mut headers, "x-referer", &format!("{site}/terminal"))?;
+    let mut req = http::Request::builder()
+        .method(Method::POST)
+        .uri(url.as_str())
+        .body(HttpBody::Bytes(
+            json!({"action":action,"data":data}).to_string().into(),
+        ))
+        .map_err(|e| ChannelError::InvalidConfig(e.to_string()))?;
+    *req.headers_mut() = headers;
+    let response = client.send(req).await?;
+    let status = response.status;
+    let bytes = read_body(response.body).await?;
+    // A 5xx or transport failure must not retire the account, even if the
+    // response body happens to mention an expired token.
+    if !status.is_success() {
+        return Err(ChannelError::UpstreamResponse {
+            status,
+            body: bytes,
+        });
+    }
+    let root: Value = serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+    let response = root
+        .pointer("/data/Response")
+        .ok_or_else(|| invalid("RPC response has no data.Response"))?;
+    Ok(response.clone())
+}
+
+pub(super) fn check_response(action: &str, response: &Value) -> Result<(), ChannelError> {
+    if let Some(error) = response.get("Error") {
+        let code = error["Code"].as_str().unwrap_or("unknown");
+        // TokenManager re-logs in on these (features.js:88375); the RPC layer
+        // logs out on PROVIDER_AUTH_EXPIRED without reconciling (:51584).
+        if action == "OAuthRefreshToken"
+            && matches!(
+                code,
+                "INVALID_REQUEST"
+                    | "SESSION_EXPIRED"
+                    | "INVALID_REFRESH_TOKEN"
+                    | "PROVIDER_AUTH_EXPIRED"
+            )
+        {
+            return Err(ChannelError::RefreshRejected(format!("OrcaTerm {code}")));
+        }
+        return Err(invalid(format!("{action} failed: {code}")));
+    }
+    Ok(())
+}
+
+pub(super) async fn identity(
+    client: &dyn OutboundClient,
+    config: &OrcaTermConfig,
+    secret: &Value,
+) -> Result<BTreeMap<String, Value>, ChannelError> {
+    let user = rpc(client, config, secret, "GetUserInfo", json!({})).await?;
+    let mut fields = BTreeMap::new();
+    for (source, target) in [
+        ("userId", "user_id"),
+        ("uin", "uin"),
+        ("ownerUin", "owner_uin"),
+        ("nickName", "nickname"),
+    ] {
+        let value = match &user[source] {
+            Value::String(value) => value.clone(),
+            Value::Number(value) => value.to_string(),
+            _ => continue,
+        };
+        if !value.is_empty() {
+            fields.insert(target.to_owned(), json!(value));
+        }
+    }
+    if !fields.contains_key("user_id") {
+        return Err(invalid("GetUserInfo did not identify the account"));
+    }
+    Ok(fields)
+}
+
+async fn renew(
+    client: &dyn OutboundClient,
+    config: &OrcaTermConfig,
+    secret: &Value,
+    fields: BTreeMap<String, Value>,
+) -> Result<OAuthCredential, ChannelError> {
+    let response = rpc(
+        client,
+        config,
+        secret,
+        "OAuthRefreshToken",
+        json!({"accessToken":token(secret)?}),
+    )
+    .await?;
+    let mut credential = tokens(&response)?;
+    credential.provider_fields = fields;
+    credential.provider_secrets = secret
+        .get("provider_secrets")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_else(BTreeMap::new);
+    if let Some(skey) = skey(secret) {
+        credential
+            .provider_secrets
+            .insert("skey".into(), json!(skey));
+    }
+    Ok(credential)
+}
+
+pub(super) fn tokens(response: &Value) -> Result<OAuthCredential, ChannelError> {
+    let access_token = response["AccessToken"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| invalid("token response has no AccessToken"))?
+        .to_owned();
+    let seconds = response
+        .get("ExpiresIn")
+        .and_then(Value::as_i64)
+        .filter(|n| *n > 0)
+        .unwrap_or(7200);
+    Ok(OAuthCredential {
+        access_token,
+        refresh_token: None,
+        id_token: None,
+        token_type: Some("Bearer".into()),
+        scopes: vec![],
+        expires_at_ms: Some(now_ms().saturating_add(seconds.saturating_mul(1000))),
+        refresh_expires_at_ms: None,
+        provider_fields: BTreeMap::new(),
+        provider_secrets: BTreeMap::new(),
+    })
+}
+
+fn token_expiry(token: &str) -> Option<i64> {
+    let mut parts = token.split('.');
+    parts.next()?;
+    let payload = parts.next()?;
+    parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let claims: Value = serde_json::from_slice(&bytes).ok()?;
+    claims["exp"].as_i64()?.checked_mul(1000)
+}
+
+/// TokenManager renews ten minutes before expiry (features.js:88121, `d = 6e5`).
+const REFRESH_MARGIN_MS: i64 = 600_000;
+
+impl CredentialRefresh for OrcaTerm {
+    fn proactive_refresh_reason(
+        &self,
+        credential: CredentialView<'_>,
+        now_ms: i64,
+    ) -> Option<RefreshReason> {
+        credential
+            .expires_at_ms
+            .is_some_and(|expires| expires <= now_ms.saturating_add(REFRESH_MARGIN_MS))
+            .then_some(RefreshReason::ProactiveExpiry)
+    }
+
+    fn response_update(
+        &self,
+        credential: CredentialView<'_>,
+        request: &http::Request<()>,
+        headers: &mut HeaderMap,
+    ) -> Option<CredentialUpdate> {
+        let next = headers.remove("x-ot-token-refreshed")?;
+        // An explicit refresh persists its own response body. Public catalog
+        // calls have no bound bearer and must never rotate an account.
+        if request.uri().query().is_some_and(|query| {
+            query
+                .split('&')
+                .any(|pair| pair == "action=OAuthRefreshToken")
+        }) {
+            return None;
+        }
+        let current = token(credential.secret).ok()?;
+        let sent = request
+            .headers()
+            .get(header::AUTHORIZATION)?
+            .to_str()
+            .ok()?
+            .strip_prefix("Bearer ")?;
+        if sent != current {
+            return None;
+        }
+        let next = next.to_str().ok()?;
+        let expires = token_expiry(next)?;
+        let previous = credential
+            .expires_at_ms
+            .unwrap_or(0)
+            .max(token_expiry(current).unwrap_or(0));
+        if expires <= previous.max(now_ms()) || next == current {
+            return None;
+        }
+        let mut secret = credential.secret.clone();
+        secret
+            .as_object_mut()?
+            .insert("access_token".into(), json!(next));
+        secret["expires_at_ms"] = json!(expires);
+        Some(CredentialUpdate {
+            secret,
+            expires_at_ms: Some(expires),
+            metadata: None,
+        })
+    }
+
+    fn supports(&self, credential: &CredentialView<'_>) -> bool {
+        token(credential.secret).is_ok()
+    }
+
+    fn refresh<'a>(&'a self, ctx: RefreshContext<'a>) -> OperationFuture<'a, CredentialUpdate> {
+        Box::pin(async move {
+            let config = OrcaTermConfig::from_view(ctx.provider)?;
+            let mut fields: BTreeMap<String, Value> = ctx
+                .credential
+                .secret
+                .get("provider_fields")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            if let Some(metadata) = ctx.credential.metadata.as_object() {
+                for (key, value) in metadata {
+                    fields.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+            }
+            let mut updated = renew(ctx.client, &config, ctx.credential.secret, fields).await?;
+            // AuthStore.reconcile re-reads the identity after every refresh
+            // (features.js:87137). The old token is already replaced upstream,
+            // so a failed lookup keeps the previous facts, not the error.
+            let renewed = serde_json::to_value(&updated).map_err(|e| invalid(e.to_string()))?;
+            if let Ok(identity) = identity(ctx.client, &config, &renewed).await {
+                updated.provider_fields.extend(identity);
+            }
+            Ok(CredentialUpdate {
+                metadata: Some({
+                    let mut metadata = ctx
+                        .credential
+                        .metadata
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default();
+                    metadata.extend(updated.provider_fields.clone());
+                    Value::Object(metadata)
+                }),
+                expires_at_ms: updated.expires_at_ms,
+                secret: serde_json::to_value(updated).map_err(|e| invalid(e.to_string()))?,
+            })
+        })
+    }
+}

@@ -94,7 +94,7 @@ class Cnb:
                 names.append(row["artifact"] + ".apk")
             if app := row.get("application_artifact"):
                 extension = {"linux": ".deb", "windows": ".exe", "macos": ".app.zip", "android": ".apk"}[row["os"]]
-                names.append(app + extension)
+                names.append(app + row.get("application_extension", extension))
             for name in names:
                 package = Path("dist/release") / name
                 expected = Path(str(package) + ".sha256").read_text().split()[0]
@@ -145,7 +145,7 @@ class Cnb:
         manifest = json.loads((directory / "manifest.json").read_text())
         channel = manifest["channel"]
         tag = os.environ["RELEASE_TAG"]
-        notes = Path(f"docs/release-notes/v{os.environ['GPROXY_BUILD_VERSION']}.md").read_text()
+        notes = Path(f"release-notes/v{os.environ['GPROXY_BUILD_VERSION']}.md").read_text()
         notes += ("\n\nCNB packages: `gproxy-*` are CLI/server builds; `gproxy-tauri-*` are "
                   "Application builds. Windows Application uses an NSIS installer; macOS "
                   "Application uses an ad-hoc signed `.app.zip`. Store submissions and "

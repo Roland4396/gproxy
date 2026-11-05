@@ -21,7 +21,7 @@ fn generate_request_full_fixture_round_trips_and_keeps_http_metadata_outside_bod
         "tools":[{"name":"search","input_schema":{"type":"object","properties":{"query":{"type":"string"}}},"description":"Search"}],
         "output_config":{"effort":"high","task_budget":{"type":"tokens","total":100}},
         "service_tier":"auto","speed":"fast","stop_sequences":["END"],"stream":false,
-        "system":"be helpful","temperature":0.2,"top_k":20,"top_p":0.9,
+        "system":"be helpful",
         "future": {"x": true}
     });
     let body: GenerateContentRequestBody = serde_json::from_value(json.clone()).unwrap();
@@ -371,5 +371,55 @@ fn typed_builders_emit_tags_and_preserve_explicit_null_without_rest() {
     assert_eq!(
         serde_json::to_value(pending).unwrap(),
         json!({"cache_miss_reason":null})
+    );
+}
+
+#[test]
+fn system_controls_can_omit_content_without_accepting_empty_user_or_null_content() {
+    use gproxy_protocol::claude::content::Message;
+    use serde_json::json;
+    let message = round_trip_known::<Message>(json!({
+        "role": "system", "output_config": {"effort": "high"}
+    }));
+    assert!(message.content.is_absent());
+    for value in [
+        json!({"role":"user"}),
+        json!({"role":"assistant"}),
+        json!({"role":"system", "content":null}),
+    ] {
+        assert!(serde_json::from_value::<Message>(value).is_err());
+    }
+}
+
+#[test]
+fn request_citation_document_title_is_a_required_nullable_key() {
+    // The request reference declares `document_title: string or null` on all
+    // three document citation params, so an untitled document's citation
+    // from a response can be sent back in the assistant's history.
+    let citations = serde_json::json!([
+        {"type":"char_location","cited_text":"a","document_index":0,"document_title":null,"start_char_index":0,"end_char_index":1},
+        {"type":"page_location","cited_text":"b","document_index":0,"document_title":"Doc","start_page_number":1,"end_page_number":2},
+        {"type":"content_block_location","cited_text":"c","document_index":1,"document_title":null,"start_block_index":0,"end_block_index":1}
+    ]);
+    let request = serde_json::json!({
+        "max_tokens": 16,
+        "model": "claude-sonnet-4-6",
+        "messages": [{"role":"assistant","content":[{"type":"text","text":"abc","citations":citations}]}]
+    });
+    let body: GenerateContentRequestBody = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&body).unwrap(), request);
+
+    // A response may omit the title entirely; the request still writes the key.
+    let mut absent = request;
+    let char_citation = &mut absent["messages"][0]["content"][0]["citations"][0];
+    char_citation
+        .as_object_mut()
+        .unwrap()
+        .remove("document_title");
+    let body: GenerateContentRequestBody = serde_json::from_value(absent).unwrap();
+    let encoded = serde_json::to_value(&body).unwrap();
+    assert_eq!(
+        encoded["messages"][0]["content"][0]["citations"][0]["document_title"],
+        serde_json::Value::Null
     );
 }

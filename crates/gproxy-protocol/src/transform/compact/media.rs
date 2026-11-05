@@ -3,7 +3,7 @@ use crate::{
     wire::{
         claude::content as a,
         gemini as g,
-        openai::{chat as c, guardian as source, responses as r},
+        openai::{chat as c, codex as source, responses as r},
     },
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -17,9 +17,16 @@ pub(super) fn attach(
             for part in &message.content {
                 match part {
                     source::ContentItem::InputImage(image) => attach_image(target, image)?,
-                    source::ContentItem::InputAudio(audio) => {
-                        attach_audio(target, &audio.audio_url)?
-                    }
+                    source::ContentItem::InputAudio(audio) => match &audio.audio {
+                        source::AudioReference::Inline { audio_url } => {
+                            attach_audio(target, audio_url)?
+                        }
+                        source::AudioReference::File { .. } => {
+                            return Err(TransformError::missing_metadata(
+                                "compact audio file references require resolved audio content",
+                            ));
+                        }
+                    },
                     source::ContentItem::InputText(_) | source::ContentItem::OutputText(_) => {}
                 }
             }

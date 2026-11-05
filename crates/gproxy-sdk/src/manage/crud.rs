@@ -39,6 +39,10 @@ where
 
     fn writer(&self) -> Writer<'_, C>;
     fn repository(&self) -> Repository<'_, C, Self::Entity>;
+    /// Project an authorized row, optionally adding derived, non-secret metadata.
+    fn to_dto(&self, row: ModelOf<Self, C>) -> Self::Dto {
+        Self::Dto::from(row)
+    }
     /// A durable row boundary, reused by reads and mutations.
     fn condition(&self) -> sea_orm::Condition {
         sea_orm::Condition::all()
@@ -96,7 +100,7 @@ where
         .repository()
         .page(shape.select(&query), offset, limit)
         .await?;
-    Ok(Page::convert(page, S::Dto::from))
+    Ok(Page::convert(page, |row| shape.to_dto(row)))
 }
 
 /// The row behind `id`, or `NotFound`. Every update and delete starts here, so
@@ -120,7 +124,7 @@ where
     C: BatchConnectionTrait + Send + Sync + 'static,
     S: Shape<C>,
 {
-    Ok(S::Dto::from(row::<C, S>(shape, id).await?))
+    Ok(shape.to_dto(row::<C, S>(shape, id).await?))
 }
 
 pub(crate) async fn create<C, S>(shape: &S, write: S::Write) -> SdkResult<S::Dto>
@@ -234,7 +238,7 @@ where
                     .ok_or(gproxy_store::StoreError::UnexpectedResult)?;
                 let model = single::<ModelOf<S, C>>(result)?
                     .ok_or_else(|| SdkError::not_found(S::ENTITY, id))?;
-                Ok(Some(S::Dto::from(model)))
+                Ok(Some(shape.to_dto(model)))
             }
         })
         .collect()
@@ -264,7 +268,7 @@ where
         .ok_or(gproxy_store::StoreError::UnexpectedResult)?;
     let model = single::<ModelOf<S, C>>(result)?
         .ok_or_else(|| SdkError::not_found(S::ENTITY, id.to_owned()))?;
-    Ok(S::Dto::from(model))
+    Ok(shape.to_dto(model))
 }
 
 /// The first row of a batch result set, if there is one.
@@ -384,30 +388,22 @@ where
     Ok(())
 }
 
-/// The prefixes an exposed model name may not start with: a registered channel
-/// id or an existing provider name. Both already mean something at resolution
-/// time, and a public name that shadowed one could never be reached.
+/// The prefixes an exposed model name may not start with: an existing provider
+/// name. It already means something at resolution time, and a public name that
+/// shadowed one could never be reached.
 pub(crate) async fn reserved_prefixes<C>(writer: Writer<'_, C>) -> SdkResult<HashSet<String>>
 where
     C: BatchConnectionTrait + Send + Sync + 'static,
 {
-    let mut reserved: HashSet<String> = writer
-        .core()
-        .channels()
-        .ids()
-        .map(str::to_ascii_lowercase)
-        .collect();
     let providers = writer
         .store()
         .providers()
         .query(provider::Entity::find())
         .await?;
-    reserved.extend(
-        providers
-            .into_iter()
-            .map(|row| row.name.to_ascii_lowercase()),
-    );
-    Ok(reserved)
+    Ok(providers
+        .into_iter()
+        .map(|row| row.name.to_ascii_lowercase())
+        .collect())
 }
 
 /// That no other row of the family already matches `condition`. `exclude` is

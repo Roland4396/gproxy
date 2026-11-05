@@ -90,7 +90,6 @@ pub struct Assembly {
 pub(super) struct ProviderConfig {
     #[serde(default)]
     pub(super) credential_strategy: CredentialStrategy,
-    pub(super) session_affinity: Option<bool>,
     /// Exact upstream model -> credential allowlist. Missing keys are unrestricted;
     /// empty lists deliberately deny the model instead of widening the pool.
     #[serde(default)]

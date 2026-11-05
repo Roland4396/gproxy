@@ -70,7 +70,7 @@ pub struct Model {
     pub stream_idle_timeout_ms: u32,
     /// Every data-plane request body except a file upload, and the size a
     /// compressed request body may inflate to.
-    #[sea_orm(default_value = 52428800)]
+    #[sea_orm(default_value = 134217728)]
     pub max_request_body_bytes: i64,
     /// A file upload's body. Provider file APIs take hundreds of megabytes.
     #[sea_orm(default_value = 536870912)]
@@ -127,8 +127,12 @@ pub struct Model {
     pub query_parameter_blacklist: Json,
 
     // Files and maintenance
-    /// Completed request history retention; None disables age-based cleanup.
+    /// Completed request capture retention (downstream and upstream records);
+    /// None disables age-based cleanup. Usage is kept on its own clock.
     pub retention_days: Option<u32>,
+    /// Usage record retention. None, the default, keeps every record: usage
+    /// is the only source of usage statistics and totals, and a row is small.
+    pub usage_retention_days: Option<u32>,
     /// Full capture payload TTL, independent of metadata history. None disables it.
     #[sea_orm(default_value = 7)]
     pub capture_payload_retention_days: Option<u32>,

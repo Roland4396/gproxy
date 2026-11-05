@@ -10,6 +10,8 @@
 /// ability helpers.
 #[cfg(any(
     feature = "cline",
+    feature = "commandcode",
+    feature = "trae",
     feature = "cloudflare_ai_gateway",
     feature = "copilotcli",
     feature = "deepseek",
@@ -20,6 +22,7 @@
     feature = "opencode",
     feature = "openrouter",
     feature = "vercel",
+    feature = "volcengine",
     feature = "xai"
 ))]
 pub(crate) mod ability;

@@ -2,7 +2,9 @@
 //!
 //! Wire facts follow the v3 channel (`crates/gproxy-channels/src/workbuddy` on
 //! `main`), which was written against a static investigation of plugin
-//! 4.22.16. Everything sits under one origin, `copilot.tencent.com`:
+//! 4.22.16. The `international` option selects `www.workbuddy.ai` and the
+//! `workbuddy-ai` login platform, as in WorkBuddy AI 5.8.4.41366630. Otherwise
+//! everything sits under the mainland origin, `copilot.tencent.com`:
 //!
 //! * **Generation** is OpenAI Chat Completions at `POST /v2/chat/completions`,
 //!   so the channel declares `Dialect::OpenAiChat` and the host converts
@@ -56,14 +58,10 @@ use crate::channel::{
     OAuthDeviceCode, OperationContext, OperationFuture, PrepareContext, ProviderView, QuotaQuery,
     forwardable,
 };
-use config::base_url;
-use futures_util::StreamExt as _;
 use gproxy_protocol::connection::Bytes;
 use gproxy_protocol::{Dialect, HttpBody, Operation, OperationKey, WireRequest, WireResponse};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 
-/// Login, refresh, quota and the catalogue all answer small documents.
-const MAX_ABILITY_BODY: usize = 1024 * 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct WorkBuddy;
@@ -149,23 +147,7 @@ pub(super) fn json_headers() -> HeaderMap {
 }
 
 pub(super) async fn read_body(body: HttpBody) -> Result<Bytes, ChannelError> {
-    match body {
-        HttpBody::Bytes(bytes) => Ok(bytes),
-        HttpBody::Stream(mut stream) => {
-            let mut out = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk =
-                    chunk.map_err(|error| ChannelError::InvalidResponse(error.to_string()))?;
-                out.extend_from_slice(&chunk);
-                if out.len() > MAX_ABILITY_BODY {
-                    return Err(ChannelError::InvalidResponse(
-                        "the reply exceeds the read limit".into(),
-                    ));
-                }
-            }
-            Ok(Bytes::from(out))
-        }
-    }
+    crate::channel::read_body(body).await
 }
 
 /// One bounded exchange outside the operation path: login, refresh and quota.
@@ -222,7 +204,11 @@ impl WorkBuddy {
         } = ctx.request;
         let url = match ctx.endpoint_override {
             Some(url) => url.to_owned(),
-            None => format!("{}{}", base_url(ctx.provider), operation_path(operation)?),
+            None => format!(
+                "{}{}",
+                config.base_url(ctx.provider),
+                operation_path(operation)?
+            ),
         };
         // The client's own session id, read before the forwarding filter
         // drops it, so the channel can put it back under its own name.
@@ -278,7 +264,7 @@ impl WorkBuddy {
         if !response.status.is_success() {
             return Ok(response);
         }
-        let body = read_body(response.body).await?;
+        let body = crate::channel::read_body(response.body).await?;
         let body = match operation {
             Operation::ListModels => models::rewrite(&body)?,
             _ => images::response(body),
@@ -309,20 +295,24 @@ impl BaseChannel for WorkBuddy {
         ChannelDescriptor {
             id: ID,
             display_name: "WorkBuddy (Tencent Copilot)",
+            credential_kinds: vec!["oauth"],
             login_modes: vec![LoginMode::DeviceCode],
             capabilities: ChannelCapabilities {
                 refresh: true,
                 quota_query: true,
-                quota_reset: false,
-                services: false,
-                websocket: false,
+                ..Default::default()
             },
             config_keys: [
                 ConfigKey::optional(
+                    "international",
+                    ConfigKeyKind::Bool,
+                    "Use WorkBuddy AI's international service and login platform. Defaults to false (mainland).",
+                ),
+                ConfigKey::optional(
                     "base_url",
                     ConfigKeyKind::String,
-                    "Upstream origin; defaults to https://copilot.tencent.com. Provider column, not config JSON.",
-                ).with_placeholder(config::DEFAULT_BASE_URL),
+                    "Upstream origin override; defaults to https://copilot.tencent.com, or https://www.workbuddy.ai when international is true. Provider column, not config JSON.",
+                ),
                 ConfigKey::optional(
                     "ide_version",
                     ConfigKeyKind::String,

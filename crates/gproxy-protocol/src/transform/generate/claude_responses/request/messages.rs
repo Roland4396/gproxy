@@ -1,9 +1,11 @@
+use crate::transform::generate::prompt_cache as cache;
+use crate::transform::generate::signature::Carried;
 use crate::{
     transform::{
         Report, TransformError,
         identity::{IdentityFlow, IdentityRole, OutputItemKind, SourceIdentity, TargetIdPolicy},
     },
-    wire::{claude::content as c, openai::responses::input as r},
+    wire::{claude::content as c, openai::responses as r},
 };
 
 fn easy(role: r::MessageRole, content: r::MessageContent) -> r::InputItem {
@@ -28,6 +30,7 @@ pub(crate) fn to_responses(
             c::Role::System => r::MessageRole::System,
         };
         let blocks = match message.content {
+            c::MessageContent::Absent => continue,
             c::MessageContent::Text(text) => {
                 out.push(easy(role, r::MessageContent::Text(text)));
                 continue;
@@ -37,7 +40,14 @@ pub(crate) fn to_responses(
         for block in blocks {
             match block {
                 c::ContentBlock::Text(text) => {
-                    out.push(easy(role, r::MessageContent::Text(text.text)))
+                    let content = if text.cache_control.is_some() {
+                        r::MessageContent::Parts(vec![r::InputContent::Text(
+                            cache::responses_text(text),
+                        )])
+                    } else {
+                        r::MessageContent::Text(text.text)
+                    };
+                    out.push(easy(role, content))
                 }
                 c::ContentBlock::Image(image) => {
                     if role != r::MessageRole::User {
@@ -45,7 +55,7 @@ pub(crate) fn to_responses(
                     }
                     out.push(easy(
                         role,
-                        r::MessageContent::Parts(vec![super::media::image(image.source)?]),
+                        r::MessageContent::Parts(vec![super::media::image(image)?]),
                     ));
                 }
                 c::ContentBlock::Document(doc) => {
@@ -172,12 +182,15 @@ pub(crate) fn to_responses(
                             ),
                         }
                     }
+                    if let Some(control) = &result.cache_control {
+                        super::media::cache_result(&mut output, control);
+                    }
                     out.push(r::InputItem::FunctionCallOutput(
                         r::FunctionCallOutput::builder(
                             r::FunctionCallOutputType::FunctionCallOutput,
-                            call_id,
                             output,
                         )
+                        .call_id(Some(call_id))
                         .build(),
                     ));
                 }
@@ -230,15 +243,71 @@ pub(crate) fn to_responses(
                             .join(""),
                     });
                     if result.is_error == Some(true) {
-                        call.error =
-                            Some(Some(text.ok_or_else(|| {
-                                TransformError::missing_metadata("MCP error text")
-                            })?));
+                        let text =
+                            text.ok_or_else(|| TransformError::missing_metadata("MCP error text"))?;
+                        call.error = Some(Some(r::McpToolCallError::Detailed(
+                            r::McpToolCallErrorDetails::Execution {
+                                content: serde_json::Value::String(text),
+                                rest: Default::default(),
+                            },
+                        )));
                         call.status = Some(r::McpCallStatus::Failed);
                     } else {
                         call.output = text.map(Some);
                         call.status = Some(r::McpCallStatus::Completed);
                     }
+                }
+                // Reasoning a Responses upstream returned goes back as the
+                // reasoning item it was, with its ciphertext; see `signature`.
+                c::ContentBlock::Thinking(thinking)
+                    if matches!(
+                        Carried::parse(&thinking.signature),
+                        Some(Carried::OpenAi { .. })
+                    ) =>
+                {
+                    let Some(Carried::OpenAi { id, encrypted }) =
+                        Carried::parse(&thinking.signature)
+                    else {
+                        unreachable!("matched by the guard")
+                    };
+                    if encrypted.is_empty() {
+                        report.omitted(
+                            "thinking",
+                            "reasoning returned without ciphertext has nothing to replay",
+                        );
+                        continue;
+                    }
+                    let id = if id.is_empty() {
+                        let id = flow
+                            .resolve_as(
+                                IdentityRole::OutputItem(OutputItemKind::Reasoning),
+                                IdentityRole::OutputItem(OutputItemKind::Reasoning),
+                                SourceIdentity::new(crate::Dialect::Claude, None, ordinal),
+                                policy,
+                            )
+                            .map_err(|e| TransformError::shape("identity", e.to_string()))?
+                            .emitted_id;
+                        ordinal += 1;
+                        id
+                    } else {
+                        id.to_owned()
+                    };
+                    let summary = if thinking.thinking.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![
+                            r::SummaryText::builder(
+                                r::SummaryTextType::SummaryText,
+                                thinking.thinking,
+                            )
+                            .build(),
+                        ]
+                    };
+                    let mut item =
+                        r::ReasoningItem::builder(r::ReasoningItemType::ReasoningItem, id, summary)
+                            .build();
+                    item.encrypted_content = Some(Some(encrypted.to_owned()));
+                    out.push(r::InputItem::Reasoning(item));
                 }
                 // A signature carried from another upstream (a Gemini thought)
                 // only goes back to that upstream; this one would refuse it.

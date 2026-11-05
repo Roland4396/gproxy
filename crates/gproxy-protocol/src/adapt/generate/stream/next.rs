@@ -229,9 +229,15 @@ impl<B: StreamBridge> StreamInvocation<B> {
                 self.reader
                     .as_mut()
                     .expect("successful start")
-                    .next::<B::NativeEvent>()
+                    .next::<serde_json::Value>()
                     .await
                     .map_err(super::codec_error)
+                    .and_then(|frame| match frame {
+                        Some(NativeFrame::Event { name, value }) => B::NativeEvent::decode(value)
+                            .map(|value| Some(NativeFrame::Event { name, value })),
+                        Some(NativeFrame::Done) => Ok(Some(NativeFrame::Done)),
+                        None => Ok(None),
+                    })
             };
             let result = match next {
                 Err(error) => Err(error),
@@ -344,7 +350,8 @@ impl<B: StreamBridge> StreamInvocation<B> {
     }
     fn finish_source(&mut self) -> Result<(), TransformError> {
         let native = B::NativeEvent::collected(
-            self.source
+            *self
+                .source
                 .take()
                 .ok_or_else(|| super::invalid("native collector consumed"))?,
         )?;
@@ -380,7 +387,8 @@ impl<B: StreamBridge> StreamInvocation<B> {
             )?;
         }
         let client = B::ClientEvent::collected(
-            self.client
+            *self
+                .client
                 .take()
                 .ok_or_else(|| super::invalid("client collector consumed"))?,
         )?;

@@ -7,10 +7,11 @@ use super::{AudioTranscription, NoiseReductionType, RealtimeAudioFormats};
 use crate::Rest;
 use serde::{Deserialize, Serialize};
 
-/// Source: `openai/types/realtime/realtime_transcription_session_create_response.py`, `RealtimeTranscriptionSessionCreateResponse`.
+// Source: `openai/types/realtime/realtime_transcription_session_create_response.py`, `RealtimeTranscriptionSessionCreateResponse`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeTranscriptionSessionCreateResponse {
     pub id: String,
     pub object: String,
@@ -38,10 +39,11 @@ pub struct RealtimeTranscriptionSessionCreateResponse {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/realtime_transcription_session_create_response.py`, `Audio`.
+// Source: `openai/types/realtime/realtime_transcription_session_create_response.py`, `Audio`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeTranscriptionSessionCreateResponseAudio {
     #[serde(
         default,
@@ -53,10 +55,11 @@ pub struct RealtimeTranscriptionSessionCreateResponseAudio {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/realtime_transcription_session_create_response.py`, `AudioInput`.
+// Source: `openai/types/realtime/realtime_transcription_session_create_response.py`, `AudioInput`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeTranscriptionSessionCreateResponseAudioInput {
     #[serde(
         default,
@@ -87,10 +90,11 @@ pub struct RealtimeTranscriptionSessionCreateResponseAudioInput {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/realtime_transcription_session_create_response.py`, `AudioInputNoiseReduction`.
+// Source: `openai/types/realtime/realtime_transcription_session_create_response.py`, `AudioInputNoiseReduction`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeTranscriptionSessionCreateResponseAudioInputNoiseReduction {
     #[serde(rename = "type")]
     #[serde(
@@ -103,10 +107,11 @@ pub struct RealtimeTranscriptionSessionCreateResponseAudioInputNoiseReduction {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/realtime_transcription_session_turn_detection.py`, `RealtimeTranscriptionSessionTurnDetection`.
+// Source: `openai/types/realtime/realtime_transcription_session_turn_detection.py`, `RealtimeTranscriptionSessionTurnDetection`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeTranscriptionSessionTurnDetection {
     #[serde(
         default,
@@ -140,6 +145,7 @@ pub struct RealtimeTranscriptionSessionTurnDetection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeTranscriptionSessionCreateResponseType {
     #[serde(rename = "transcription")]
     Transcription,
@@ -148,6 +154,7 @@ pub enum RealtimeTranscriptionSessionCreateResponseType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeTranscriptionSessionCreateResponseIncludeItem {
     #[serde(rename = "item.input_audio_transcription.logprobs")]
     ItemInputAudioTranscriptionLogprobs,

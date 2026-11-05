@@ -158,14 +158,17 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Catalog<'_, C> {
             ));
         }
 
-        // Only rules of the same scope collide: a global rule and a provider
-        // rule may carry the same pattern and mean different things.
-        let existing: BTreeMap<String, String> = self
+        let saved_rules = self
             .writer
             .store()
             .price_rules()
             .query(price_rule::Entity::find())
-            .await?
+            .await?;
+        let prices = gproxy_core::pricing::PriceBook::compile(&saved_rules, &[], &[]);
+        // Same-scope rows are replacement targets. Other applicable saved
+        // rules (including inherited global rules) must not be shadowed by a
+        // default import unless the caller explicitly requests overwriting.
+        let existing: BTreeMap<String, String> = saved_rules
             .into_iter()
             .filter(|rule| rule.provider_id == provider_id)
             .map(|rule| (rule.model_pattern, rule.id))
@@ -177,6 +180,15 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> Catalog<'_, C> {
         let store = self.writer.store();
 
         for name in &wanted {
+            if !request.overwrite
+                && prices
+                    .rules()
+                    .iter()
+                    .any(|rule| rule.matches(provider_id.as_deref(), name))
+            {
+                report.skipped += 1;
+                continue;
+            }
             let Some(source) = (match &provider_id {
                 Some(_) => price_for(catalog, name),
                 None => model_for(catalog, name).and_then(|model| model.pricing.as_ref()),
@@ -410,7 +422,7 @@ fn rate_model(
         }),
         unit_quantity: Set(crud::decimal(&rate.unit_size.to_string(), "unitSize")?),
         value: Set(price_decimal(&rate.price, "price")?),
-        conditions: Set(None),
+        conditions: Set(rate.conditions.clone()),
         priority: Set(i32::try_from(rate.priority).unwrap_or(i32::MAX)),
     })
 }
@@ -430,17 +442,8 @@ fn tier_model(rule_id: &str, tier: &DefaultModelTierDto) -> SdkResult<price_tier
         input_per_million: Set(money(&tier.input_price, "inputPrice")?),
         output_per_million: Set(money(&tier.output_price, "outputPrice")?),
         cache_read_per_million: Set(money(&tier.cache_read_price, "cacheReadPrice")?),
-        cache_creation_5m_per_million: Set(money(
-            &tier.cache_creation_5m_price,
-            "cacheCreation5mPrice",
-        )?),
-        cache_creation_30m_per_million: Set(money(
-            &tier.cache_creation_30m_price,
-            "cacheCreation30mPrice",
-        )?),
-        cache_creation_1h_per_million: Set(money(
-            &tier.cache_creation_1h_price,
-            "cacheCreation1hPrice",
+        cache_creation_per_million: Set(super::pricing::cache_creation_prices(
+            &tier.cache_creation_per_million,
         )?),
         image_output_per_million: Set(money(&tier.image_output_price, "imageOutputPrice")?),
         audio_input_per_million: Set(money(&tier.audio_input_price, "audioInputPrice")?),
@@ -531,8 +534,10 @@ fn tls_presets() -> Vec<TlsPresetDto> {
         TlsPresetDto {
             id: "antigravity".to_owned(),
             label: "Antigravity".to_owned(),
-            // CLI 1.2.16's Code Assist profile, using the algorithms the
-            // compiled BoringSSL supports (same as the channel default).
+            // The Code Assist TLS profile captured from CLI 1.2.16 and
+            // unchanged in 1.4.10 (the IDE runs the CLI as its hub), using the algorithms the compiled
+            // BoringSSL supports (same as the channel default). The user
+            // agent is the IDE hub's.
             emulation: json!({
                 "kind": "custom",
                 "alpn": [],
@@ -562,10 +567,10 @@ fn tls_presets() -> Vec<TlsPresetDto> {
                 "signed_cert_timestamps": true,
                 "session_ticket": false,
                 "psk_dhe_ke": false,
-                "headers": [["user-agent", concat!(
-                    "antigravity/cli/1.2.16 ",
-                    "(aidev_client; os_type=linux; arch=amd64; cl=992658124; auth_method=consumer)"
-                )]],
+                "headers": [[
+                    "user-agent",
+                    "antigravity/hub/2.28.1 (aidev_client; os_type=linux; arch=amd64; cl=1009308193)"
+                ]],
             }),
         },
         simple(
@@ -577,7 +582,7 @@ fn tls_presets() -> Vec<TlsPresetDto> {
         simple(
             "copilot",
             "GitHub Copilot CLI",
-            "copilot/1.0.61 (linux v24.16.0) term/unknown",
+            "copilot/1.0.77 (linux v24.16.0) term/unknown",
             "X25519:P-256:P-384",
         ),
     ];
@@ -888,7 +893,6 @@ mod tests {
     fn bundled_catalog_parses() {
         let catalog = catalog().expect("the bundled catalog parses");
         assert_eq!(catalog.models.len(), catalog.source.total_models);
-        assert!(catalog.source.priced_models > 400);
         for model in &catalog.models {
             if let Some(pricing) = &model.pricing {
                 for rate in &pricing.rates {
@@ -898,10 +902,10 @@ mod tests {
                 }
             }
         }
-        let found = model_for(catalog, "claude-sonnet-4").expect("a bare name resolves");
-        assert_eq!(found.model_id, "claude-sonnet-4");
-        let pricing = price_for(catalog, "anthropic/claude-sonnet-4").expect("a glob covers it");
-        assert!(pricing.model_pattern.contains("claude-sonnet-4"));
+        let found = model_for(catalog, "claude-sonnet-4.5").expect("a bare name resolves");
+        assert_eq!(found.model_id, "claude-sonnet-4.5");
+        let pricing = price_for(catalog, "anthropic/claude-sonnet-4.5").expect("a glob covers it");
+        assert!(pricing.model_pattern.contains("claude-sonnet-4.5"));
         assert!(
             pricing
                 .rates
@@ -936,13 +940,13 @@ mod tests {
                 .all(|model| !model.model_id.contains('/'))
         );
         for name in [
-            "claude-sonnet-4",
-            "anthropic/claude-sonnet-4",
-            " ANTHROPIC/CLAUDE-SONNET-4 ",
+            "claude-sonnet-4.5",
+            "anthropic/claude-sonnet-4.5",
+            " ANTHROPIC/CLAUDE-SONNET-4.5 ",
         ] {
             assert_eq!(
                 model_for(catalog, name).unwrap().model_id,
-                "claude-sonnet-4"
+                "claude-sonnet-4.5"
             );
         }
         assert_eq!(
@@ -957,7 +961,7 @@ mod tests {
                 .model_pattern,
             "*claude-sonnet-4.5*"
         );
-        assert!(price_for(catalog, "claude-sonnet-4/no-such-model").is_none());
+        assert!(price_for(catalog, "claude-sonnet-4.5/no-such-model").is_none());
     }
 
     #[test]

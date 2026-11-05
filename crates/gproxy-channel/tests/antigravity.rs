@@ -9,7 +9,8 @@ use gproxy_channel::channel::{
     ProviderView, QuotaEntry, QuotaScope, QuotaValue, QuotaWindow,
 };
 use gproxy_channel::channels::antigravity::{
-    Antigravity, CLI_USER_AGENT, DEFAULT_CLIENT_ID, DEFAULT_REDIRECT_URI,
+    Antigravity, DEFAULT_CLIENT_ID, DEFAULT_REDIRECT_URI, EDITOR_USER_AGENT, IDE_VERSION,
+    USER_AGENT,
 };
 use gproxy_channel::{ChannelDescriptor, LoginMode, OutboundClient};
 use gproxy_protocol::{
@@ -250,11 +251,11 @@ fn prepare_sends_the_editor_identity_and_a_client_cannot_spoof_it() {
     .expect("prepared");
     assert_eq!(
         prepared.headers()["user-agent"],
-        HeaderValue::from_static(CLI_USER_AGENT)
+        HeaderValue::from_static(USER_AGENT)
     );
     assert_eq!(prepared.headers()["content-type"], "application/json");
     assert_eq!(prepared.headers()["x-client-name"], "antigravity");
-    assert_eq!(prepared.headers()["x-client-version"], "1.2.16");
+    assert_eq!(prepared.headers()["x-client-version"], "2.28.1");
     assert_ne!(
         prepared.headers()["x-machine-id"],
         "client-supplied-identity"
@@ -291,14 +292,14 @@ fn a_provider_allowlist_keeps_the_client_headers_it_names() {
     assert!(!prepared.headers().contains_key("x-not-allowed"));
     assert_eq!(
         prepared.headers()["user-agent"],
-        HeaderValue::from_static(CLI_USER_AGENT)
+        HeaderValue::from_static(USER_AGENT)
     );
 }
 
 // ------------------------------------------------------------ body shaping
 
 #[test]
-fn the_gemini_body_is_wrapped_and_the_high_tier_gets_its_thinking_budget() {
+fn the_gemini_body_is_wrapped_in_the_envelope() {
     let config = json!({});
     let secret = secret();
     let metadata = json!({"project_id": "proj-metadata"});
@@ -308,55 +309,18 @@ fn the_gemini_body_is_wrapped_and_the_high_tier_gets_its_thinking_budget() {
         Operation::GenerateContent,
         request(
             HeaderMap::new(),
-            "/v1beta/models/gemini-3.1-pro-high:generateContent",
+            "/v1beta/models/gemini-3.8-flash-medium:generateContent",
             json!({"contents": [{"parts": [{"text": "hi"}]}], "store": true}),
         ),
     )
     .expect("prepared");
     let body = body_json(&prepared);
-    assert_eq!(body["model"], "gemini-3.1-pro-high");
+    assert_eq!(body["model"], "gemini-3.8-flash-medium");
     // Read from the host-persisted metadata, never rediscovered.
     assert_eq!(body["project"], "proj-metadata");
     assert!(body["request"].get("store").is_none());
-    assert_eq!(
-        body["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-        10_001
-    );
-
-    // An explicit budget from the caller is left alone, and other models get
-    // no budget at all.
-    let prepared = prepare(
-        &config,
-        credential(&secret, &metadata),
-        Operation::GenerateContent,
-        request(
-            HeaderMap::new(),
-            "/v1beta/models/gemini-3.1-pro-high:generateContent",
-            json!({"contents": [], "generationConfig": {"thinkingConfig": {"thinkingBudget": 7}}}),
-        ),
-    )
-    .expect("prepared");
-    assert_eq!(
-        body_json(&prepared)["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-        7
-    );
-
-    let prepared = prepare(
-        &config,
-        credential(&secret, &metadata),
-        Operation::GenerateContent,
-        request(
-            HeaderMap::new(),
-            "/v1beta/models/gemini-3-pro:generateContent",
-            json!({"contents": []}),
-        ),
-    )
-    .expect("prepared");
-    assert!(
-        body_json(&prepared)["request"]
-            .get("generationConfig")
-            .is_none()
-    );
+    // No thinking budget the client did not ask for.
+    assert!(body["request"].get("generationConfig").is_none());
 }
 
 fn claude_request(body: Value) -> Value {
@@ -443,14 +407,14 @@ fn claude_keeps_its_output_limit_and_takes_one_thinking_budget() {
         claude_config(json!({"maxOutputTokens": 32_000, "temperature": 0.2})),
         json!({"maxOutputTokens": 32_000, "temperature": 0.2})
     );
-    // The snake spelling, clamped to the catalogue's ceiling.
+    // The snake spelling preserves limits above the default budget.
     assert_eq!(
         claude_config(json!({"max_output_tokens": 200_000})),
-        json!({"maxOutputTokens": 64_000})
+        json!({"maxOutputTokens": 200_000})
     );
     // No limit and no thinking: the body stays as the caller left it.
     assert_eq!(claude_config(json!({})), Value::Null);
-    // Thinking without a limit gets the model maximum, so the budget fits.
+    // Thinking without a limit gets the default output budget.
     assert_eq!(
         claude_config(json!({"thinkingConfig": {"thinkingBudget": 20_000}})),
         json!({"maxOutputTokens": 64_000,
@@ -602,15 +566,36 @@ fn the_envelope_carries_the_agent_fields_the_editor_sends() {
     assert!(first.get("user_prompt_id").is_none());
     assert_eq!(first["userAgent"], "antigravity");
     assert_eq!(first["requestType"], "agent");
-    let id = first["requestId"].as_str().unwrap();
-    assert!(id.starts_with("agent-") && id.len() == 42, "{id}");
     assert!(first["request"].get("safetySettings").is_none());
-    // The session follows the first user text, so every turn shares it.
-    let session = first["request"]["sessionId"].as_str().unwrap().to_owned();
-    assert!(session.starts_with('-') && session[1..].parse::<i64>().is_ok());
-    let second = envelope("gemini-3-flash", body);
-    assert_eq!(second["request"]["sessionId"], session.as_str());
-    assert_ne!(second["requestId"], first["requestId"]);
+    assert_eq!(first["request"]["sessionId"], "-3750763034362895579");
+    // agent/<cascade>/<ms>/<trajectory>/<step>, the ids following the first
+    // user text so every turn of a conversation shares them.
+    let id = first["requestId"].as_str().unwrap();
+    let parts: Vec<&str> = id.split('/').collect();
+    assert_eq!(parts.len(), 5, "{id}");
+    assert_eq!((parts[0], parts[4]), ("agent", "1"));
+    let labels = &first["request"]["labels"];
+    assert_eq!(labels["cascade_id"], parts[1]);
+    assert_eq!(labels["trajectory_id"], parts[3]);
+    assert_eq!(labels["last_step_index"], "0");
+    assert_eq!(labels["request_id"], format!("{}-0", parts[3]));
+    assert_eq!(labels["used_non_gemini_model"], "false");
+    assert_eq!(labels["model_enum"], "MODEL_PLACEHOLDER_M18");
+    let mut turn = body.clone();
+    turn["contents"] = json!([
+        {"role": "user", "parts": [{"text": "hello"}]},
+        {"role": "model", "parts": [{"text": "hi"}]},
+        {"role": "user", "parts": [{"text": "again"}]},
+    ]);
+    let second = envelope("gemini-3-flash", turn);
+    let next = second["requestId"].as_str().unwrap();
+    assert!(next.starts_with(&format!("agent/{}/", parts[1])), "{next}");
+    assert!(next.ends_with(&format!("/{}/3", parts[3])), "{next}");
+    assert_eq!(second["request"]["labels"]["last_step_index"], "2");
+    assert_eq!(
+        second["request"]["labels"]["request_id"],
+        format!("{}-1", parts[3])
+    );
 
     let image = envelope("gemini-3.1-flash-image", json!({"contents": []}));
     assert_eq!(image["requestType"], "image_gen");
@@ -996,11 +981,11 @@ async fn the_model_directory_harvests_every_role_field() {
         .expect("model");
     assert_eq!(response.status, StatusCode::NOT_FOUND);
 
-    // The catalogue call posts an empty body and carries no project.
+    // The catalogue call names the account's project, as the IDE does.
     let (method, uri, _, body) = client.sent()[0].clone();
     assert_eq!(method, Method::POST);
     assert!(uri.ends_with("/v1internal:fetchAvailableModels"), "{uri}");
-    assert_eq!(body, b"{}");
+    assert_eq!(body, br#"{"project":"proj-secret"}"#);
 }
 
 // ------------------------------------------------------------------ quota
@@ -1330,10 +1315,14 @@ async fn authorize_uses_antigravitys_own_client_and_scopes() {
             .authorize_url
             .contains(&format!("client_id={DEFAULT_CLIENT_ID}"))
     );
-    // The three scopes beyond the Gemini CLI's.
-    for scope in ["cclog", "experimentsandconfigs", "aicode"] {
+    // The IDE's two scopes beyond the Gemini CLI's, and nothing more.
+    for scope in ["cclog", "experimentsandconfigs"] {
         assert!(start.authorize_url.contains(scope), "{scope} missing");
     }
+    assert!(!start.authorize_url.contains("aicode"));
+    // The IDE asks for consent and uses no PKCE.
+    assert!(start.authorize_url.contains("prompt=consent"));
+    assert!(!start.authorize_url.contains("code_challenge"));
 }
 
 #[tokio::test]
@@ -1383,10 +1372,16 @@ async fn the_exchange_discovers_the_project_and_reports_antigravity_as_the_ide()
     assert!(sent[1].1.ends_with("/v1internal:loadCodeAssist"));
     let load: Value = serde_json::from_slice(&sent[1].3).unwrap();
     assert_eq!(load["metadata"]["ideType"], "ANTIGRAVITY");
+    assert_eq!(load["metadata"]["ideVersion"], IDE_VERSION);
+    assert_eq!(load["metadata"]["ideName"], "antigravity");
+    assert!(load["metadata"].get("pluginType").is_none());
     assert_eq!(
         sent[1].2["user-agent"],
-        HeaderValue::from_static(CLI_USER_AGENT)
+        HeaderValue::from_static(EDITOR_USER_AGENT)
     );
+    // The exchange carries no PKCE verifier.
+    let form = String::from_utf8(sent[0].3.clone()).unwrap();
+    assert!(!form.contains("code_verifier"), "{form}");
 }
 
 #[tokio::test]

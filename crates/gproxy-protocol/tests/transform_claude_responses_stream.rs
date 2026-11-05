@@ -535,9 +535,9 @@ fn interleaved_response_items_wait_for_unknown_earlier_parts() {
     assert_eq!(value.text, "b");
 }
 #[test]
-fn responses_reasoning_never_becomes_claude_thinking() {
-    // Anthropic accepts thinking only with a signature it issued; a Responses
-    // upstream's reasoning has none, whatever its encrypted_content holds.
+fn responses_reasoning_with_a_carried_claude_signature_becomes_claude_thinking() {
+    // A Claude signature gproxy carried in encrypted_content is restored as
+    // the native thinking block, streamed the same as the whole response.
     let body = response(
         json!([{"type":"reasoning","id":"rs-native","summary":[],"content":[{"type":"reasoning_text","text":"signed text"}],"encrypted_content":"claude:native-signature","status":"completed"},message("m",json!([text("answer")]),"completed")]),
         "completed",
@@ -562,12 +562,11 @@ fn responses_reasoning_never_becomes_claude_thinking() {
         .unwrap()
         .value;
     assert_eq!(actual, expected);
-    assert!(
-        actual
-            .content
-            .iter()
-            .all(|block| !matches!(block, c::ResponseContentBlock::Thinking(_)))
-    );
+    let c::ResponseContentBlock::Thinking(thinking) = &actual.content[0] else {
+        panic!()
+    };
+    assert_eq!(thinking.signature, "native-signature");
+    assert_eq!(thinking.thinking, "signed text");
 }
 #[test]
 fn mcp_native_result_is_not_a_client_tool_or_an_untyped_text_wrapper() {
@@ -617,36 +616,63 @@ fn incomplete_causes_are_preserved_and_initial_usage_does_not_replace_missing_fi
     );
 }
 #[test]
-fn actual_usage_unlocks_pending_events_and_preserves_final_reasoning_growth() {
-    let events = r_events(response(
-        json!([message("m", json!([text("held")]), "completed")]),
-        "completed",
-        None,
-    ));
-    let mut stream =
-        ResponsesToClaudeStream::new(Default::default(), flow(), Default::default()).unwrap();
-    let mut output = Vec::new();
-    for event in events {
-        let terminal = matches!(event, rs::StreamEvent::Completed(_));
-        let result = stream.push(event).unwrap();
-        if !terminal {
-            assert!(result.value.is_empty());
+fn missing_initial_usage_does_not_delay_content_and_final_usage_is_preserved() {
+    for item in [
+        message("m", json!([text("streamed")]), "completed"),
+        function("fc", "call", "{\"x\":1}", "completed"),
+    ] {
+        let events = r_events(response(json!([item]), "completed", None));
+        let mut stream =
+            ResponsesToClaudeStream::new(Default::default(), flow(), Default::default()).unwrap();
+        let mut output = Vec::new();
+        let mut saw_delta = false;
+        for event in events {
+            let created = matches!(event, rs::StreamEvent::Created(_));
+            let content_delta = matches!(
+                event,
+                rs::StreamEvent::OutputTextDelta(_)
+                    | rs::StreamEvent::FunctionCallArgumentsDelta(_)
+            );
+            if matches!(event, rs::StreamEvent::Completed(_)) {
+                assert!(saw_delta, "content must be emitted before completion");
+            }
+            let result = stream.push(event).unwrap();
+            if created {
+                let cs::StreamEvent::MessageStart(start) = &result.value[0] else {
+                    panic!("message_start must not wait for usage");
+                };
+                assert_eq!(start.message.usage.input_tokens, 0);
+                assert_eq!(start.message.usage.output_tokens, 0);
+            }
+            if content_delta {
+                assert!(
+                    result
+                        .value
+                        .iter()
+                        .any(|event| { matches!(event, cs::StreamEvent::ContentBlockDelta(_)) })
+                );
+                saw_delta = true;
+            }
+            output.extend(result.value);
         }
-        output.extend(result.value);
+        output.extend(stream.finish().unwrap().chunks);
+        let actual = collect_c(output);
+        assert_eq!(actual.usage.input_tokens, 3);
+        assert_eq!(actual.usage.cache_creation_input_tokens, Some(Some(2)));
+        assert_eq!(actual.usage.cache_read_input_tokens, Some(Some(4)));
+        assert_eq!(actual.usage.output_tokens, 5);
+        assert_eq!(
+            actual
+                .usage
+                .output_tokens_details
+                .unwrap()
+                .unwrap()
+                .thinking_tokens,
+            1
+        );
     }
-    output.extend(stream.finish().unwrap().chunks);
-    let actual = collect_c(output);
-    assert_eq!(actual.usage.output_tokens, 5);
-    assert_eq!(
-        actual
-            .usage
-            .output_tokens_details
-            .unwrap()
-            .unwrap()
-            .thinking_tokens,
-        1
-    );
 }
+
 #[test]
 fn wrong_item_associations_unsupported_payloads_and_native_errors_poison() {
     let mut events = r_events(response(
@@ -731,18 +757,20 @@ fn context_bounds_rest_cleanup_and_pending_amplification_are_enforced() {
         ..Default::default()
     };
     let mut stream = ResponsesToClaudeStream::new(Default::default(), flow(), limits).unwrap();
-    let mut failed = false;
-    for event in r_events(response(
-        json!([message("m", json!([text("text")]), "completed")]),
-        "completed",
-        None,
-    )) {
-        if stream.push(event).is_err() {
-            failed = true;
-            break;
-        }
-    }
-    assert!(failed);
+    let created = r_events(response(json!([]), "completed", None)).remove(0);
+    stream.push(created).unwrap();
+    // An added item can carry initial content that must fit the holding budget,
+    // even though missing usage no longer causes the entire stream to queue.
+    let added = re(json!({
+        "type":"response.output_item.added",
+        "sequence_number":1,
+        "output_index":0,
+        "item":message("m", json!([text("text")]), "in_progress")
+    }));
+    assert_eq!(
+        stream.push(added).unwrap_err().kind(),
+        TransformErrorKind::Limit
+    );
     assert!(stream.finish().is_err());
 }
 

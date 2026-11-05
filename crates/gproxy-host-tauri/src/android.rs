@@ -1,35 +1,24 @@
 //! What Android needs that a desktop does not, and nothing more.
 //!
-//! Tauri gives the phone a WebView, an IPC bridge and an APK. It does not
-//! give it any of the three behaviours a gateway on a phone actually needs,
-//! and all three existed in v3's hand-written Java before this crate did:
+//! Tauri gives the phone a WebView, an IPC bridge and an APK. A gateway on a
+//! phone needs three more behaviours, implemented in Kotlin under
+//! `gen/android/app/src/main/java/com/leenhawk/gproxy/desktop/`:
 //!
-//! | v3, hand-written Java | here, Kotlin under `gen/android/app/src/main/java/com/leenhawk/gproxy/app/` |
-//! |---|---|
-//! | `scripts/android/GproxyService.java.in` | `GproxyService.kt`, over [`start`] |
-//! | `scripts/android/GproxyBootReceiver.java.in` | `GproxyBootReceiver.kt`, same service |
-//! | `scripts/android/GproxyUpdateActivity.java.in` | `GproxyUpdateActivity.kt` |
-//! | `scripts/android/GproxyUpdateProvider.java.in` | `GproxyUpdateProvider.kt` |
-//! | `scripts/android/AndroidManifest.xml.in` | `AndroidManifest.xml`, merged by Gradle |
+//! - `GproxyService.kt`: the foreground service, over [`start`];
+//! - `GproxyBootReceiver.kt`: starts the same service at boot;
+//! - `GproxyUpdateActivity.kt` and `GproxyUpdateProvider.kt`: in-app update.
 //!
-//! # The one thing that is different from v3, and it changes everything
+//! `AndroidManifest.xml` declares them and is merged by Gradle.
 //!
-//! v3's service **spawned a binary**. It copied `gproxy.bin` out of the
-//! assets, set `LD_LIBRARY_PATH`, started a child process, polled
-//! `http://127.0.0.1:8787/admin` until it answered, and read the child's
-//! stdout into a ring buffer. The app and the gateway were two processes, and
-//! the service's job was to supervise the other one.
+//! # The service supervises nothing
 //!
-//! Here there is no other one. The engine is compiled into
-//! `libgproxy_host_tauri.so`, the activity loads it, and the data plane
-//! listens from inside the app's own process. So the service's job is the
-//! opposite of supervision: it exists to **stop Android from killing the
-//! process the engine is already in**. An app with no foreground service is
-//! frozen and then killed shortly after the user leaves it, and a gateway that
-//! dies when you switch apps is not a gateway.
+//! The engine is compiled into `libgproxy_host_tauri.so`, the activity loads
+//! it, and the data plane listens from inside the app's own process. The
+//! service exists to **stop Android from killing the process the engine is
+//! already in**. An app with no foreground service is frozen and then killed
+//! shortly after the user leaves it.
 //!
-//! That is also why there is no health poll here. v3 polled because it could
-//! not see inside the child; [`crate::engine::ensure_started`] returns the
+//! There is no health poll: [`crate::engine::ensure_started`] returns the
 //! assembled instance or the error that stopped it, on the calling thread.
 //!
 //! # Who starts what
@@ -320,7 +309,7 @@ pub fn status() -> Status {
 // ---------------------------------------------------------------------------
 // The JNI surface.
 //
-// Four functions, all on `com.leenhawk.gproxy.app.GproxyNative`, all of them thin:
+// Four functions, all on `com.leenhawk.gproxy.desktop.GproxyNative`, all of them thin:
 // decode, call one function above, encode. A panic unwinding out of an
 // `extern "system"` frame aborts the process, so each one catches — a failed
 // start has to be a message in a notification, not a dead app.
@@ -354,7 +343,7 @@ fn java_string(env: &mut JNIEnv<'_>, text: &str) -> jstring {
 /// it starts anything, so that the engine is never assembled by a caller that
 /// had to guess.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeConfigure(
+pub extern "system" fn Java_com_leenhawk_gproxy_desktop_GproxyNative_nativeConfigure(
     mut env: JNIEnv<'_>,
     _this: JObject<'_>,
     data_dir: JString<'_>,
@@ -370,7 +359,7 @@ pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeConfigure
 
 /// `GproxyNative.start()`: the status JSON, after assembling if needed.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeStart(
+pub extern "system" fn Java_com_leenhawk_gproxy_desktop_GproxyNative_nativeStart(
     mut env: JNIEnv<'_>,
     _this: JObject<'_>,
 ) -> jstring {
@@ -382,7 +371,7 @@ pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeStart(
 
 /// `GproxyNative.status()`: the status JSON, assembling nothing.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeStatus(
+pub extern "system" fn Java_com_leenhawk_gproxy_desktop_GproxyNative_nativeStatus(
     mut env: JNIEnv<'_>,
     _this: JObject<'_>,
 ) -> jstring {
@@ -396,7 +385,7 @@ pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeStatus(
 /// stays with Android, which asks the user before replacing the application.
 #[cfg(not(store_distribution))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeUpdate(
+pub extern "system" fn Java_com_leenhawk_gproxy_desktop_GproxyNative_nativeUpdate(
     mut env: JNIEnv<'_>,
     _this: JObject<'_>,
 ) -> jstring {
@@ -443,7 +432,7 @@ pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeUpdate(
 /// last chance to let the listener go and the background sync finish, and it
 /// is why Stop is not just `Process.killProcess`.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_leenhawk_gproxy_app_GproxyNative_nativeShutdown(
+pub extern "system" fn Java_com_leenhawk_gproxy_desktop_GproxyNative_nativeShutdown(
     _env: JNIEnv<'_>,
     _this: JObject<'_>,
 ) {

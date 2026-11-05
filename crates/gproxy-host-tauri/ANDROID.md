@@ -34,29 +34,19 @@ window's, over IPC.
 
 ## What Tauri gives, and the three things it does not
 
-Tauri v2 supports Android and supplies the project scaffolding, the WebView,
-the IPC bridge and the packaging. It supplies none of the three behaviours a
-gateway needs on a phone. All three existed in v3's hand-written Java, and all
-three are ported rather than reinvented.
+Tauri v2 supplies the project scaffolding, the WebView, the IPC bridge and the
+packaging. A gateway on a phone needs three more behaviours, implemented in
+Kotlin under `gen/android/`:
 
-| | v3, Java | v4, Kotlin in `gen/android/` |
-|---|---|---|
-| foreground service | `scripts/android/GproxyService.java.in` | `GproxyService.kt` |
-| boot receiver | `scripts/android/GproxyBootReceiver.java.in` | `GproxyBootReceiver.kt` |
-| in-app update | `GproxyUpdateActivity.java.in`, `GproxyUpdateProvider.java.in` | `GproxyUpdateActivity.kt`, `GproxyUpdateProvider.kt` |
+| behaviour | implementation |
+|---|---|
+| foreground service | `GproxyService.kt` |
+| boot receiver | `GproxyBootReceiver.kt` |
+| in-app update | `GproxyUpdateActivity.kt`, `GproxyUpdateProvider.kt` |
 
 ### The foreground service supervises nothing
 
-This is the one real difference from v3, and it changes the shape of
-everything else.
-
-v3's service copied a `gproxy.bin` out of the APK's assets, set
-`LD_LIBRARY_PATH`, started it as a **child process**, polled
-`http://127.0.0.1:8787/admin` until it answered, and pumped the child's stdout
-into a ring buffer. The app and the gateway were two processes and the
-service's job was to supervise the other one.
-
-Here the engine is compiled into `libgproxy_host_tauri.so` and the data plane
+The engine is compiled into `libgproxy_host_tauri.so` and the data plane
 listens from inside the app's own process. There is no child to supervise, no
 asset to unpack, no health poll to write, and no way for two processes to
 disagree about which database they opened. The service exists for one reason:
@@ -123,7 +113,7 @@ unavailable instead of offering the old wrapper APK.
 
 This arrangement is only legal because of something in Tauri's generated code,
 so it is worth stating with the citation:
-`gen/android/app/src/main/java/com/leenhawk/gproxy/app/generated/WryActivity.kt`
+`gen/android/app/src/main/java/com/leenhawk/gproxy/desktop/generated/WryActivity.kt`
 calls `Rust.create()` — the call that runs `gproxy_host_tauri::start` — from
 **`ProcessLifecycleOwner`**, not from the activity:
 
@@ -220,7 +210,7 @@ about 43 MB. Build release unless you need a debugger.
 ## The APK, read back (historical v4.0.0 build)
 
 The following output predates the identifier rename. Its old package/JNI names
-are retained as historical evidence; current builds use `com.leenhawk.gproxy.app`.
+are retained as historical evidence; current builds use `com.leenhawk.gproxy.desktop`.
 
 `aapt dump badging` on the release build, with the ninety-odd translated
 `application-label-*` lines cut:
@@ -353,20 +343,13 @@ APK with `zipalign` and `apksigner` after Gradle builds it. The job installs:
 Disk is the surprise: a debug `.so` for this engine is about a gigabyte, and
 four ABIs of it will fill a small runner.
 
-## v3's APK machinery is still here
+## Termux
 
-Nothing Android has been deleted. `scripts/android/`,
-`scripts/package-android-apk.sh` and the two `*-linux-android` release targets
-remain as reference material; releases now ship the CLI as ZIP and Termux DEB,
-not the legacy wrapper APK. These are two different things:
+The two `*-linux-android` release targets are the plain server binary on an
+Android ABI, run from a Termux shell. They are separate from the app and ship
+as ZIP and Termux DEB.
 
-- the **Java templates** are this port's source material, and the reference for
-  anything that turns out to have been done for a reason not recorded here;
-- the **`*-linux-android` targets** are Termux — the plain server binary on an
-  Android ABI, run from a shell — which is a separate story from an app with a
-  window, and unaffected by any of this.
-
-The current application identifier is `com.leenhawk.gproxy.app` across Android,
+The current application identifier is `com.leenhawk.gproxy.desktop` across Android,
 HarmonyOS and desktop platforms. The command-line edition already exists as
 **GPROXY CLI**; its corresponding project namespace is `com.leenhawk.gproxy.cli`.
 New macOS CLI services use that namespace; existing legacy registrations remain supported.

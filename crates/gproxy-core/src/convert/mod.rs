@@ -13,11 +13,13 @@ mod dispatch;
 mod embeddings;
 mod files;
 pub(crate) mod generate;
-mod guardian;
 mod images;
+mod interactions;
 mod memory;
 mod models;
 pub(crate) mod responses_ws;
+pub(crate) mod stream_error;
+pub(crate) mod upstream_error;
 mod video;
 mod web_search;
 
@@ -31,3 +33,5 @@ pub use route::{
 };
 pub(crate) mod local;
 pub use spec::{is_websocket, response_framing, spec_for};
+
+pub use models::local_metadata as local_model_metadata;

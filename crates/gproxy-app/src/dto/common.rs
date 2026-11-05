@@ -13,6 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ListQuery {
     /// 1-based. Zero and absent both mean the first page.
     pub page: Option<u64>,
@@ -21,6 +22,9 @@ pub struct ListQuery {
     /// Case-insensitive substring of the family's natural name column.
     pub search: Option<String>,
     pub user_id: Option<String>,
+    /// Rows whose subject is this user or one of the user's API keys — for the
+    /// families whose rule names one subject or the other.
+    pub owner_user_id: Option<String>,
     pub api_key_id: Option<String>,
     pub organization_id: Option<String>,
     pub team_id: Option<String>,
@@ -54,6 +58,7 @@ impl ListQuery {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Page<T> {
     pub items: Vec<T>,
     pub total: u64,
@@ -80,6 +85,7 @@ impl<T> Page<T> {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum BatchItem<W, P> {
     Create(W),
     Update(BatchPatch<P>),
@@ -90,6 +96,7 @@ pub enum BatchItem<W, P> {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BatchPatch<P> {
     pub id: String,
     pub patch: P,

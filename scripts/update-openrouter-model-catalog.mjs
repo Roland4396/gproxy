@@ -40,10 +40,10 @@ function scaledPrice(value, shift) {
 export function perMillion(value) { return scaledPrice(value, 6) }
 export function roundPrice(value) { return scaledPrice(value, 0) }
 
-function tokenRate(metric, value, priority, required = false) {
+function tokenRate(metric, value, priority, required = false, ttlSeconds = null) {
   const price = perMillion(value)
   if (price == null || (!required && /^0(?:\.0+)?$/.test(value))) return null
-  return { metric, unit_size: TOKEN_UNIT, price, priority }
+  return { metric, unit_size: TOKEN_UNIT, price, priority, ...(ttlSeconds === null ? {} : { conditions: { ttl_seconds: ttlSeconds } }) }
 }
 
 function scalarRate(metric, value, priority) {
@@ -57,11 +57,13 @@ function rates(pricing, author) {
     tokenRate("output_tokens", pricing.completion, 1, true),
     tokenRate("cached_input_tokens", pricing.input_cache_read, 2),
     tokenRate(
-      author === "openai" ? "cache_creation_30m_tokens" : "cache_creation_5m_tokens",
+      "cache_creation_tokens",
       pricing.input_cache_write,
       3,
+      false,
+      author === "openai" ? null : 300,
     ),
-    tokenRate("cache_creation_1h_tokens", pricing.input_cache_write_1h, 4),
+    tokenRate("cache_creation_tokens", pricing.input_cache_write_1h, 4, false, 3600),
     tokenRate("image_output_tokens", pricing.image_output, 5),
     tokenRate("audio_input_tokens", pricing.audio, 6),
     tokenRate("audio_output_tokens", pricing.audio_output, 7),
@@ -84,11 +86,11 @@ function tiers(pricing, author, modelId) {
     assign("input_price", override.prompt)
     assign("output_price", override.completion)
     assign("cache_read_price", override.input_cache_read)
-    assign(
-      author === "openai" ? "cache_creation_30m_price" : "cache_creation_5m_price",
-      override.input_cache_write,
-    )
-    assign("cache_creation_1h_price", override.input_cache_write_1h)
+    const cachePrices = [
+      { ttl_seconds: author === "openai" ? null : 300, price: perMillion(override.input_cache_write) },
+      { ttl_seconds: 3600, price: perMillion(override.input_cache_write_1h) },
+    ].filter(entry => entry.price !== null)
+    if (cachePrices.length) result.cache_creation_per_million = cachePrices
     assign("image_output_price", override.image_output)
     assign("audio_input_price", override.audio)
     assign("audio_output_price", override.audio_output)
@@ -271,6 +273,36 @@ export function applyCodexCatalog(catalog, payload, revision = "unknown") {
   return normalizeCatalogNames(catalog)
 }
 
+/**
+ * Keep entries curated from another source, such as the Claude documentation,
+ * which neither OpenRouter nor Codex would recreate. A curated entry replaces
+ * a generated one of the same name.
+ */
+export function carryCuratedEntries(catalog, previous) {
+  const curated = (previous?.models ?? []).filter((model) =>
+    model.metadata_source?.catalog && model.metadata_source.catalog !== "openrouter")
+  if (curated.length === 0) return catalog
+  const names = new Set(curated.map((model) => model.model_id.toLowerCase()))
+  catalog.models = [
+    ...catalog.models.filter((model) => !names.has(model.model_id.toLowerCase())),
+    ...curated,
+  ]
+  for (const [key, value] of Object.entries(previous.source ?? {})) {
+    if (key.endsWith("_updated_at")) catalog.source[key] = value
+  }
+  const priced = catalog.models.filter((model) => model.pricing != null)
+  catalog.source = {
+    ...catalog.source,
+    total_models: catalog.models.length,
+    context_models: catalog.models.filter((model) => model.context_window != null).length,
+    output_limit_models: catalog.models.filter((model) => model.max_output_tokens != null).length,
+    priced_models: priced.length,
+    image_output_priced_models: priced.filter((model) =>
+      model.pricing.rates.some((rate) => rate.metric === "image_output_tokens")).length,
+  }
+  return normalizeCatalogNames(catalog)
+}
+
 function modelPricing(model, outputModalities, dynamic) {
   if (!outputModalities.some((modality) => SUPPORTED_OUTPUT_MODALITIES.has(modality))) return null
   const pricing = model.pricing
@@ -337,7 +369,11 @@ async function main() {
   try {
     revision = execFileSync("git", ["-C", path.join(root, "samples", "codex"), "rev-parse", "HEAD"], { encoding: "utf8" }).trim()
   } catch {}
-  const catalog = applyCodexCatalog(buildCatalog(await loadPayload(inputPath)), codex, revision)
+  const previous = JSON.parse(await readFile(outputPath, "utf8"))
+  const catalog = carryCuratedEntries(
+    applyCodexCatalog(buildCatalog(await loadPayload(inputPath)), codex, revision),
+    previous,
+  )
   await writeFile(outputPath, `${JSON.stringify(catalog)}\n`, "utf8")
   console.log(`Updated ${outputPath} with ${catalog.models.length} models.`)
 }

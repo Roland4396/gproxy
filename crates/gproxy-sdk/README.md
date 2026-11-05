@@ -114,6 +114,12 @@ let (response, usage) = execution.into_parts();
 application layer decided — the allowed providers and credentials, the budget
 chain, the session — is passed in; nothing here authenticates anyone.
 
+New OpenAI Realtime connections can select their model through `?model=` when
+the builder has no explicit model. The normal resolver handles aliases and core
+binds the upstream selector. Gemini Live callers supply the model explicitly
+before connecting; the HTTP host obtains it from the first setup frame. OpenAI
+`call_id` continuations retain their existing cached binding.
+
 For Responses, `connect().send()` uses the managed session driver: creates and
 steering successors are admitted separately, including HTTP/SSE bridging, and
 usage is recorded per turn. Hosts that admit turns themselves use
@@ -127,14 +133,12 @@ A model name is resolved by the first rule that matches:
 |---|---|---|
 | absent | every enabled provider, no upstream model | `settings.max_attempts` |
 | a model route name | that route's enabled members | the route's own |
-| `channel/model` | the providers of that channel, preferring the ones whose catalog lists `model` | `settings.max_attempts` |
 | `provider/model` | that one provider | `settings.max_attempts` |
 | anything else | `SdkError::UnknownModel` | — |
 
-Route names are matched exactly and before the prefix forms, so an operator
-can expose the literal name `openai/gpt-5`. Within the prefix forms **a channel
-id beats a provider of the same name**: a channel id is fixed by the build and
-cannot be renamed out of the way, while a provider always can.
+Route names are matched exactly and before the prefix form, so an operator
+can expose the literal name `openai/gpt-5`. The prefix is always a provider
+name, never a channel id.
 
 Candidates are then narrowed by channel, by allowed provider ids and by allowed
 credential ids — the last is how an application layer keeps one organization's
@@ -207,7 +211,6 @@ offer is `SdkError::Unsupported`.
 |---|---|---|
 | Authorization code | `authcode_start` → `authcode_complete` | A browser redirect with PKCE |
 | Device code | `device_start` → `device_poll`, repeatedly | A code typed on another device |
-| Cookie exchange | `cookie_exchange` | A session cookie the person already has |
 
 The SDK owns everything that is not the upstream's business. **PKCE**: the
 verifier is 32 random bytes minted here, never sent, and only its S256 digest
@@ -257,8 +260,8 @@ primitive a management write uses: one revision, one reload, one notification.
 The secret is sealed with the configured codec **before** the statement is
 built, so nothing between the channel and the database sees it in the clear and
 nothing sends it back — the answer is the credential's id and nothing else.
-`auth_kind` is `oauth` for the two OAuth flows and `cookie` for the cookie
-exchange, the owner columns are copied through untouched, and a caller that
+`auth_kind` is `oauth` for both OAuth flows; the owner columns are copied
+through untouched, and a caller that
 supplied no label gets one derived from the channel and whatever account the
 upstream named, made unique among that provider's labels.
 
@@ -355,7 +358,7 @@ what a console would have listed.
 
 ```json
 {
-  "formatVersion": 5,
+  "formatVersion": 6,
   "exportedAtMs": 1758412800000,
   "secretsOmitted": false,
   "secrets": ["aes-gcm"],

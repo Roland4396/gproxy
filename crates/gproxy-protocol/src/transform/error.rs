@@ -1,5 +1,19 @@
 use std::{error::Error, fmt};
 
+/// A recognized upstream failure, retaining its declared vendor error payload.
+/// Hosts can render a client error event without parsing a diagnostic string.
+#[derive(Debug)]
+pub struct UpstreamError<T>(pub T);
+
+impl<T: serde::Serialize> fmt::Display for UpstreamError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let json = serde_json::to_string(&self.0).map_err(|_| fmt::Error)?;
+        f.write_str(&json)
+    }
+}
+
+impl<T: fmt::Debug + serde::Serialize> Error for UpstreamError<T> {}
+
 /// Why a request, result, or required host operation could not be converted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
@@ -61,6 +75,20 @@ impl TransformError {
 
     pub fn invalid_result(context: impl Into<String>, detail: impl Into<String>) -> Self {
         Self::new(TransformErrorKind::InvalidResult, context, detail)
+    }
+
+    /// Retain a declared upstream error for HTTP and streaming renderers.
+    pub fn upstream<T>(context: impl Into<String>, payload: T) -> Self
+    where
+        T: fmt::Debug + serde::Serialize + Send + Sync + 'static,
+    {
+        let error = UpstreamError(payload);
+        Self::with_source(
+            TransformErrorKind::InvalidResult,
+            context,
+            error.to_string(),
+            error,
+        )
     }
 
     pub fn missing_metadata(field: impl Into<String>) -> Self {

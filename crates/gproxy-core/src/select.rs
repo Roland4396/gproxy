@@ -6,13 +6,30 @@ use crate::{
     CredentialBlocks, CredentialData, CredentialStatus, CredentialStrategy, RequestContext, keys,
 };
 use gproxy_protocol::Operation;
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
-/// How long a session keeps its credential without traffic.
-const AFFINITY_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long a session keeps its credential without traffic: as long as the
+/// upstream's prompt cache stays warm, which is what the pin is for. Five
+/// minutes is Anthropic's default cache lifetime and the floor of OpenAI's.
+const CACHE_WARM_MS: i64 = 5 * 60 * 1000;
+/// A one-hour cache write, or an upstream whose cache lives about an hour.
+const CACHE_WARM_LONG_MS: i64 = 60 * 60 * 1000;
+/// Below this many cached tokens (read or written) a reply left nothing worth
+/// staying for: the smallest prefix Anthropic and OpenAI cache.
+const CACHE_WORTH_TOKENS: u64 = 1024;
+/// Spent-share points within which credentials count as equally used, so
+/// they keep rotating rather than chasing every percent.
+const HEADROOM_BAND: f64 = 10.0;
 /// Rotation counters outlive any realistic idle gap; a lost counter only
 /// restarts rotation at the first candidate.
 const ROTATION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// How often, at most, one request may try a cooled-down credential early
+/// while every candidate is blocked.
+const PROBE_LEASE: Duration = Duration::from_secs(15);
 
 pub(crate) struct Selection {
     pub credential: Arc<CredentialData>,
@@ -62,11 +79,12 @@ impl<C> Core<C> {
 impl<C: gproxy_seaorm::BatchConnectionTrait> Core<C> {
     /// Pick one credential from `request.target.credentials` minus `excluded`.
     /// Eligibility: enabled, Active, not retired, not blocked for this
-    /// model/operation now. Affinity honours an existing eligible pin before
-    /// strategy ordering. Unbound selections rotate among the best candidates.
+    /// model/operation now. Sticky hashes stable sessions; round-robin affinity
+    /// reuses an eligible pin. Other selections rotate among the best candidates.
     pub(crate) async fn select_credential(
         &self,
         request: &RequestContext,
+        headers: &http::HeaderMap,
         excluded: &HashSet<String>,
         now_ms: i64,
     ) -> CoreResult<Selection> {
@@ -100,17 +118,47 @@ impl<C: gproxy_seaorm::BatchConnectionTrait> Core<C> {
         }
         // Every candidate's blocks in one read rather than one per credential.
         let blocks = self.read_blocks_many(&candidates).await?;
-        let mut eligible: Vec<(Arc<CredentialData>, CredentialBlocks)> = candidates
+        let (mut eligible, blocked): (Vec<_>, Vec<_>) = candidates
             .into_iter()
             .zip(blocks)
             .map(|(credential, mut blocks)| {
-                blocks.retain_enforced(provider, &credential, model);
+                blocks.retain_for_request(provider, &credential, model, request.operation, headers);
                 (credential, blocks)
             })
-            .filter(|(_, blocks)| blocks.blocked_by(model, operation, now_ms).is_none())
-            .collect();
+            .partition(|(_, blocks)| blocks.blocked_by(model, operation, now_ms).is_none());
         if eligible.is_empty() {
-            return Err(dead.unwrap_or(CoreError::NoUsableCredential));
+            // Blocked, each until its longest covering block ends.
+            let mut blocked: Vec<(Arc<CredentialData>, i64, bool)> = blocked
+                .into_iter()
+                .filter_map(|(credential, blocks)| {
+                    let until = blocks.blocked_by(model, operation, now_ms)?.until_ms;
+                    let probeable = blocks.probeable(model, operation, now_ms);
+                    Some((credential, until, probeable))
+                })
+                .collect();
+            blocked.sort_by_key(|(_, until, _)| *until);
+            // Nothing tried yet on this request: rather than refuse outright,
+            // one request at a time may try the credential whose cooldown
+            // ends soonest. Quota, credit and unserved blocks are never tried.
+            if model_credentials.is_none()
+                && excluded.is_empty()
+                && let Some((credential, _, _)) = blocked.iter().find(|(_, _, probe)| *probe)
+                && self
+                    .cache
+                    .acquire_lease(
+                        &keys::credential_probe(&credential.provider_id, &credential.id),
+                        PROBE_LEASE,
+                    )
+                    .await?
+                    .is_some()
+            {
+                return Ok(Selection {
+                    credential: credential.clone(),
+                    assignment: None,
+                });
+            }
+            let retry_after_ms = blocked.first().map(|(_, until, _)| (until - now_ms).max(0));
+            return Err(dead.unwrap_or(CoreError::NoUsableCredential { retry_after_ms }));
         }
 
         let affinity_key = request
@@ -125,8 +173,8 @@ impl<C: gproxy_seaorm::BatchConnectionTrait> Core<C> {
                 },
                 provider_id: provider.entity.id.clone(),
             });
-        let pinned = match (&affinity_key, provider.session_affinity) {
-            (Some(key), true) => self
+        let pinned = match (&affinity_key, provider.credential_strategy) {
+            (Some(key), CredentialStrategy::RoundRobinAffinity) => self
                 .cache
                 .get(&keys::credential_affinity(key))
                 .await?
@@ -138,30 +186,53 @@ impl<C: gproxy_seaorm::BatchConnectionTrait> Core<C> {
             Some(index) => index,
             None => {
                 let mut ids: Vec<&str> = eligible.iter().map(|(c, _)| c.id.as_str()).collect();
-                if provider.credential_strategy == CredentialStrategy::EarliestReset {
-                    let resets = self
-                        .credential_reset_times(&eligible, model, operation, now_ms)
+                // A stable sticky session hashes onto the set as it is; every
+                // other pick leans towards quota headroom first.
+                let hashed = provider.credential_strategy == CredentialStrategy::Sticky
+                    && affinity_key.is_some();
+                if !hashed && ids.len() > 1 {
+                    let credentials: Vec<_> = eligible.iter().map(|(c, _)| c).collect();
+                    let standing = self
+                        .credential_standing(&credentials, model, operation, now_ms)
                         .await?;
-                    if let Some(earliest) = resets.values().min() {
-                        ids.retain(|id| resets.get(*id) == Some(earliest));
+                    if provider.credential_strategy == CredentialStrategy::EarliestReset
+                        && let Some(earliest) = standing.values().filter_map(|s| s.reset_ms).min()
+                    {
+                        ids.retain(|id| {
+                            standing.get(*id).and_then(|s| s.reset_ms) == Some(earliest)
+                        });
+                    }
+                    // Preserve the local earliest-reset policy: equal or unknown
+                    // reset times rotate, rather than silently changing to a
+                    // headroom-weighted policy. Other native strategies keep
+                    // the upstream quota-headroom selection improvement.
+                    if provider.credential_strategy != CredentialStrategy::EarliestReset {
+                        prefer_headroom(&mut ids, &standing);
                     }
                 }
                 ids.sort_unstable();
-                let signature = ids.join(",");
-                let counter = match self
-                    .cache
-                    .increment(
-                        &keys::credential_selection(&provider.entity.id, &signature),
-                        1,
-                        i64::MAX as u64,
-                        ROTATION_TTL,
-                    )
-                    .await?
+                let position = if let (CredentialStrategy::Sticky, Some(key)) =
+                    (provider.credential_strategy, &affinity_key)
                 {
-                    gproxy_cache::IncrementOutcome::Applied(counter) => counter.value,
-                    gproxy_cache::IncrementOutcome::Limited { current } => current,
+                    sticky_slot(&key.scope.session_id, &key.provider_id) % ids.len() as u64
+                } else {
+                    let signature = ids.join(",");
+                    let counter = match self
+                        .cache
+                        .increment(
+                            &keys::credential_selection(&provider.entity.id, &signature),
+                            1,
+                            i64::MAX as u64,
+                            ROTATION_TTL,
+                        )
+                        .await?
+                    {
+                        gproxy_cache::IncrementOutcome::Applied(counter) => counter.value,
+                        gproxy_cache::IncrementOutcome::Limited { current } => current,
+                    };
+                    (counter - 1) % ids.len() as u64
                 };
-                let position = usize::try_from((counter - 1) % ids.len() as u64).unwrap_or(0);
+                let position = usize::try_from(position).unwrap_or(0);
                 let chosen = ids[position];
                 eligible
                     .iter()
@@ -171,7 +242,9 @@ impl<C: gproxy_seaorm::BatchConnectionTrait> Core<C> {
         };
         // An agent session overrides the strategy: it stays on its assigned
         // credential while usable, and reserves the strategy's pick otherwise.
-        let (index, assignment) = match self.session_pick(request, &eligible, index, now_ms).await?
+        let (index, assignment) = match self
+            .session_pick(request, headers, &eligible, index, now_ms)
+            .await?
         {
             Some((index, handle)) => (index, Some(handle)),
             None => (index, None),
@@ -185,47 +258,179 @@ impl<C: gproxy_seaorm::BatchConnectionTrait> Core<C> {
 
     /// Record that this session should keep using this credential. Called
     /// after a successful attempt only, so a failing pick is never pinned.
+    /// The pin lasts while the prompt cache it protects is warm, counted from
+    /// this use; settlement refines it from the reply's cache usage.
     pub(crate) async fn pin_affinity(
         &self,
         request: &RequestContext,
         credential_id: &str,
         now_ms: i64,
     ) -> CoreResult<()> {
-        let Some(session) = request.session.as_ref().filter(|s| s.is_stable()) else {
+        let Some(cache_key) = affinity_cache_key(request) else {
             return Ok(());
         };
-        if !request.target.provider.session_affinity {
-            return Ok(());
-        }
-        let key = CredentialAffinityKey {
-            scope: AffinityScope {
-                scope: request.scope.clone(),
-                session_id: session.id.clone(),
-                source: session.source,
-            },
-            provider_id: request.target.provider.entity.id.clone(),
-        };
-        let cache_key = keys::credential_affinity(&key);
         let existing = self
             .cache
             .get(&cache_key)
             .await?
-            .and_then(|entry| serde_json::from_slice::<CredentialAffinity>(&entry.value).ok());
+            .and_then(|entry| serde_json::from_slice::<CredentialAffinity>(&entry.value).ok())
+            .filter(|pin| pin.credential_id == credential_id);
         let value = CredentialAffinity {
             credential_id: credential_id.to_owned(),
-            anchored_at_ms: existing
-                .as_ref()
-                .filter(|pin| pin.credential_id == credential_id)
-                .map_or(now_ms, |pin| pin.anchored_at_ms),
+            anchored_at_ms: existing.as_ref().map_or(now_ms, |pin| pin.anchored_at_ms),
             last_success_at_ms: now_ms,
+            warm_ms: existing.and_then(|pin| pin.warm_ms),
         };
+        let ttl = warm_for(request, value.warm_ms);
         self.cache
             .put(
                 &cache_key,
                 serde_json::to_vec(&value).map_err(|e| CoreError::Rewrite(e.to_string()))?,
-                AFFINITY_TTL,
+                ttl,
             )
             .await?;
         Ok(())
     }
+}
+
+/// The session's credential pin key, when its provider pins sessions.
+fn affinity_cache_key(request: &RequestContext) -> Option<String> {
+    let session = request.session.as_ref().filter(|s| s.is_stable())?;
+    if request.target.provider.credential_strategy != CredentialStrategy::RoundRobinAffinity {
+        return None;
+    }
+    Some(keys::credential_affinity(&CredentialAffinityKey {
+        scope: AffinityScope {
+            scope: request.scope.clone(),
+            session_id: session.id.clone(),
+            source: session.source,
+        },
+        provider_id: request.target.provider.entity.id.clone(),
+    }))
+}
+
+/// How long a pin outlives its last use: what the session's cache writes
+/// said, else the channel's cache lifetime. ChatGPT's Codex backend keeps a
+/// conversation's prefix for about an hour, the API's for minutes.
+fn warm_for(request: &RequestContext, warm_ms: Option<i64>) -> Duration {
+    let default = match request.target.provider.channel.id() {
+        "codex" => CACHE_WARM_LONG_MS,
+        _ => CACHE_WARM_MS,
+    };
+    Duration::from_millis(u64::try_from(warm_ms.unwrap_or(default)).unwrap_or(0))
+}
+
+/// After the reply settles: keep the session's pin warm from its end, for an
+/// hour once it wrote a one-hour cache entry, and drop it when the reply
+/// cached too little to be worth returning to. A reply that reported no cache
+/// figures, or a pin that moved to another credential meanwhile, only has its
+/// lifetime refreshed or is left alone. Best effort, like the pin itself.
+pub(crate) async fn settle_affinity(
+    cache: &dyn gproxy_cache::Cache,
+    request: &RequestContext,
+    exchanges: &[crate::ExchangeUsage],
+    now_ms: i64,
+) -> CoreResult<()> {
+    let Some(cache_key) = affinity_cache_key(request) else {
+        return Ok(());
+    };
+    let provider_id = &request.target.provider.entity.id;
+    let Some(last) = exchanges
+        .iter()
+        .filter(|e| &e.provider_id == provider_id)
+        .max_by_key(|e| e.attempt_ordinal)
+    else {
+        return Ok(());
+    };
+    let current = cache.get(&cache_key).await?;
+    let pin = match &current {
+        Some(entry) => match serde_json::from_slice::<CredentialAffinity>(&entry.value) {
+            Ok(pin) if pin.credential_id == last.credential_id => Some(pin),
+            _ => return Ok(()),
+        },
+        None => None,
+    };
+    let tokens = &last.usage.tokens;
+    let reported = tokens.cached_input_tokens.is_some() || !tokens.cache_creation.is_empty();
+    let cached = tokens
+        .cached_input_tokens
+        .unwrap_or(0)
+        .saturating_add(tokens.cache_creation_tokens());
+    let expected = current.map(|entry| entry.version);
+    if reported && cached < CACHE_WORTH_TOKENS {
+        if expected.is_some() {
+            cache.compare_exchange(&cache_key, expected, None).await?;
+        }
+        return Ok(());
+    }
+    // A missing pin is written back only for a reply that demonstrably
+    // cached: a long reply can outlast its own pin.
+    if pin.is_none() && !reported {
+        return Ok(());
+    }
+    // The last write with a known retention decides; a read keeps it.
+    let written: Vec<u64> = tokens
+        .cache_creation
+        .iter()
+        .filter(|write| write.tokens > 0)
+        .filter_map(|write| write.ttl_seconds)
+        .collect();
+    let warm_ms = if written.is_empty() {
+        pin.as_ref().and_then(|pin| pin.warm_ms)
+    } else {
+        written
+            .iter()
+            .any(|ttl| *ttl >= 3600)
+            .then_some(CACHE_WARM_LONG_MS)
+    };
+    let value = CredentialAffinity {
+        credential_id: last.credential_id.clone(),
+        anchored_at_ms: pin.as_ref().map_or(now_ms, |pin| pin.anchored_at_ms),
+        last_success_at_ms: pin.as_ref().map_or(now_ms, |pin| pin.last_success_at_ms),
+        warm_ms,
+    };
+    cache
+        .compare_exchange(
+            &cache_key,
+            expected,
+            Some(gproxy_cache::Replacement {
+                value: serde_json::to_vec(&value).map_err(|e| CoreError::Rewrite(e.to_string()))?,
+                ttl: warm_for(request, warm_ms),
+            }),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Lean an unbound pick towards quota headroom. Credentials whose observed
+/// windows are spent more than `HEADROOM_BAND` points past the least spent
+/// one sit out; the rest rotate as before. A credential without a reading is
+/// neutral: it is never left out and never leaves anyone out.
+fn prefer_headroom(ids: &mut Vec<&str>, standing: &HashMap<String, crate::select_reset::Standing>) {
+    let used = |id: &str| standing.get(id).and_then(|s| s.used_percent);
+    let Some(least) = ids.iter().filter_map(|id| used(id)).min_by(f64::total_cmp) else {
+        return;
+    };
+    ids.retain(|id| used(id).is_none_or(|u| u < least + HEADROOM_BAND));
+}
+
+/// A stable slot for a session on one provider: the same session keeps the
+/// same credential across processes and restarts, and two sessions spread
+/// across the credential set. splitmix64's finalizer over an FNV-1a hash of
+/// both inputs, which is v3's `stable_slot` with string ids.
+pub fn sticky_slot(affinity_key: &str, provider_id: &str) -> u64 {
+    let mut value = fnv1a(affinity_key) ^ fnv1a(provider_id).rotate_left(32);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value.wrapping_mul(0x94d0_49bb_1331_11eb) ^ (value >> 31)
+}
+
+fn fnv1a(value: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }

@@ -1,8 +1,8 @@
 //! Claude Code: a Claude.ai subscription used through the OAuth surface of
 //! `api.anthropic.com`, the way the Claude Code CLI uses it.
 //!
-//! Wire facts follow the v3 channel (`crates/gproxy-channels/src/claudecode`
-//! on `main`) and the Claude Code CLI (`samples/claude-code-2.1.252`):
+//! Wire facts follow the Claude Code CLI (`samples/claude-code-2.1.316`,
+//! audited in `design/claudecode-2.1.316.md`):
 //! PKCE authorization at `claude.com/cai/oauth/authorize`, token exchange and
 //! refresh at `platform.claude.com/v1/oauth/token` (JSON bodies), a cookie
 //! login that mints the same OAuth tokens through `claude.ai/api/bootstrap`
@@ -18,16 +18,17 @@
 //! The credential secret is an `OAuthCredential`; account facts a login
 //! discovers (`account_uuid`, `device_id`, plan tiers, email) travel in
 //! `provider_fields` and, once the host persists them, in the credential's
-//! metadata. A cookie login additionally keeps the normalized `cookie` at the
+//! metadata. A cookie initialization additionally keeps the normalized `cookie` at the
 //! top level of the secret so a refresh can re-mint tokens without a refresh
 //! token.
 
-mod cookie;
 mod cch;
+mod cookie;
 mod hygiene;
 mod quota;
 mod reset;
 mod services;
+mod usage_limit;
 
 pub use services::{KIND_FILE, KIND_PLUGIN, KIND_SKILL, service_routes};
 
@@ -35,14 +36,13 @@ use crate::OutboundClient;
 use crate::channel::{
     AuthorizationCode, AuthorizationRequest, AuthorizationStart, BaseChannel, ChannelCapabilities,
     ChannelDescriptor, ChannelError, ChannelHeaders, ChannelServices, ConfigKey, ConfigKeyKind,
-    CookieLogin, CredentialRefresh, CredentialUpdate, CredentialView, HOST_CONFIG_KEYS,
-    HeaderAllowlist, LoginContext, LoginMode, OAuthAuthorizationCode, OAuthCredential,
-    OperationContext, OperationFuture, PrepareContext, ProviderView, QuotaHeaders, QuotaModel,
-    QuotaQuery, QuotaReset, RefreshContext, forwardable,
+    CredentialRefresh, CredentialUpdate, CredentialView, HOST_CONFIG_KEYS, HeaderAllowlist,
+    LoginContext, LoginMode, OAuthAuthorizationCode, OAuthCredential, OperationContext,
+    OperationFuture, PrepareContext, ProviderView, QuotaHeaders, QuotaModel, QuotaQuery,
+    QuotaReset, RefreshContext, forwardable,
 };
-use crate::channels::shared::{cache, claude_fallback};
 pub use crate::channels::shared::claude_fallback::FallbackMode;
-use futures_util::StreamExt;
+use crate::channels::shared::{cache, claude_fallback, claude_images};
 use gproxy_client::{Backend, ConnectionConfig};
 use gproxy_protocol::{
     Dialect, HttpBody, Operation, OperationKey, WireRequest, WireResponse, capability::StateWrite,
@@ -50,13 +50,13 @@ use gproxy_protocol::{
 };
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub const ID: &str = "claudecode";
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
-/// The claude.ai origin the cookie login bootstraps against (v3 `auth.rs`).
+/// The claude.ai origin the cookie initialization bootstraps against (v3 `auth.rs`).
 pub const DEFAULT_CLAUDE_AI_URL: &str = "https://claude.ai";
 /// v3 `login.rs` and the CLI's `AUTHORIZE_URL`.
 pub const DEFAULT_AUTHORIZE_URL: &str = "https://claude.com/cai/oauth/authorize";
@@ -65,27 +65,43 @@ pub const DEFAULT_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token"
 /// The manual-callback redirect the CLI registers (v3 `auth.rs`).
 pub const DEFAULT_REDIRECT_URI: &str = "https://platform.claude.com/oauth/code/callback";
 pub const DEFAULT_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-/// Default refresh scopes verified against CLI 2.1.293, including plugins.
+/// Default refresh scopes verified against CLI 2.1.316, including plugins.
 pub const OAUTH_SCOPE: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins";
-/// Interactive login adds `org:create_api_key` (CLI 2.1.293).
+/// Interactive login adds `org:create_api_key` (CLI 2.1.316).
 pub const LOGIN_SCOPE: &str = concat!(
     "org:create_api_key ",
     "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins"
 );
 pub const OAUTH_BETA: &str = "oauth-2025-04-20";
-/// The CLI version the channel impersonates; audited in
-/// `design/claudecode-2.1.293.md` against the installed binary and local capture.
-pub const CLI_VERSION: &str = "2.1.293";
-pub const CLI_USER_AGENT: &str = "claude-cli/2.1.293 (external, cli)";
-pub const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// The CLI marks a request it sends in low-priority mode with this header
-/// (CLI 2.1.283).
-const USAGE_LIMIT_HEADER: &str = "anthropic-usage-limit";
-const LOW_PRIORITY: &str = "slow";
+/// The betas Claude Code 2.1.316 sends on a main-loop Messages call before
+/// its feature-specific ones (`samples/claude-code-2.1.316/captures`): the
+/// agent marker, then the OAuth beta, then the three every Messages call of
+/// the CLI carries, a side call without `thinking` or `context_management`
+/// in its body included. A Messages call from a client that sent no beta
+/// list of its own (one converted from another dialect) goes out with
+/// these; the betas a feature in the body calls for are added from the body
+/// as for any client (`hygiene`).
+const MAIN_LOOP_BETAS: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05";
+/// The CLI version the channel impersonates. Protocol behavior was audited in
+/// `design/claudecode-2.1.316.md` against the release binary and local capture.
+pub const CLI_VERSION: &str = "2.1.316";
+pub const CLI_USER_AGENT: &str = "claude-cli/2.1.316 (external, cli)";
+/// The `@anthropic-ai/claude-agent-sdk` release that bundles `CLI_VERSION`
+/// (npm 0.3.316 pins Claude Code 2.1.316). The SDK spawns that CLI with
+/// `CLAUDE_CODE_ENTRYPOINT=sdk-ts` and `CLAUDE_AGENT_SDK_VERSION` set.
+pub const AGENT_SDK_VERSION: &str = "0.3.316";
+/// What the CLI's `wU` builds under the TypeScript Agent SDK.
+pub const AGENT_SDK_USER_AGENT: &str = "claude-cli/2.1.316 (external, sdk-ts, agent-sdk/0.3.316)";
+/// The profile and roles calls use the CLI's axios client with this agent.
+const PROFILE_USER_AGENT: &str = "claude-code/2.1.316";
+pub const ANTHROPIC_VERSION: &str = gproxy_protocol::claude::API_VERSION;
+/// The CLI posts to the token endpoint through axios (2.1.316 capture).
+const TOKEN_USER_AGENT: &str = "axios/1.15.2";
+/// Grant-error description for a suspended account. The CLI keeps the refresh
+/// token for an appeal instead of discarding it (2.1.302 `NUr`).
+const ACCOUNT_ON_HOLD: &str = "account_on_hold";
 /// Optional scopes a refresh preserves when the credential already has them.
 const PRESERVED_SCOPES: &[&str] = &["user:projects:read", "user:projects:write"];
-/// Bodies the channel reads itself (login, refresh, usage) are small.
-const MAX_SERVICE_BODY: usize = 1024 * 1024;
 const DEFAULT_EXPIRES_IN_SECS: i64 = 3600;
 /// Twenty-minute buckets for the derived session id (v3 `auth.rs`).
 const SESSION_WINDOW_MS: i64 = 20 * 60 * 1000;
@@ -96,7 +112,7 @@ const SESSION_WINDOW_MS: i64 = 20 * 60 * 1000;
 pub struct ClaudecodeConfig {
     pub authorize_url: String,
     pub token_url: String,
-    /// The claude.ai origin the cookie login talks to.
+    /// The claude.ai origin the cookie initialization talks to.
     pub claude_ai_url: String,
     /// Static headers added to every backend request.
     pub headers: BTreeMap<String, String>,
@@ -108,12 +124,73 @@ pub struct ClaudecodeConfig {
     pub fallback_mode: FallbackMode,
     /// Ordered fallback models; at most three are sent.
     pub fallback_models: Vec<String>,
-    /// Ask for the CLI's low-priority mode on every Messages call
-    /// (`anthropic-usage-limit: slow`) and keep a full five-hour window from
-    /// blocking the credential. The server decides per account whether to
-    /// serve it (`anthropic-ratelimit-unified-slow-status`); the weekly
-    /// windows still block.
+    /// Accept a first-party lower-priority offer after a five-hour rejection,
+    /// then wait/retry capacity failures with the CLI's bounds. Off by default.
     pub low_priority: bool,
+    /// Request the CLI's extended grace for tool-result continuations when
+    /// extra usage is not known to be enabled. Off by default.
+    pub extended_usage: bool,
+    /// Which first-party client the requests present as.
+    pub client_identity: ClientIdentity,
+    /// Place the CLI's identity system block (`You are Claude Code, ...` or
+    /// the Agent SDK's) after the billing block, matching its entrypoint.
+    /// Off by default: the client's system blocks are left as sent.
+    pub identity_system_block: bool,
+}
+
+/// The first-party client the channel presents as. Both run the same CLI
+/// binary over the same OAuth token; they differ only in the user agent's
+/// entrypoint, the billing block's `cc_entrypoint` and turn fields, and the
+/// identity system block (2.1.316 `wU`, `p7n`; `captures/` holds both). The
+/// billing checksum (`cch`), `cc_version` suffix and `metadata.user_id` do
+/// not depend on the entrypoint.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientIdentity {
+    /// The interactive Claude Code CLI (`cli`). A client's own valid CLI
+    /// user agent and billing entrypoint are kept.
+    #[default]
+    Cli,
+    /// The Claude Agent SDK (`sdk-ts`). Only an Agent SDK user agent from
+    /// the client is kept; the billing block follows it.
+    AgentSdk,
+}
+
+impl ClientIdentity {
+    fn default_user_agent(self) -> &'static str {
+        match self {
+            Self::Cli => CLI_USER_AGENT,
+            Self::AgentSdk => AGENT_SDK_USER_AGENT,
+        }
+    }
+
+    fn of(provider: ProviderView<'_>) -> Self {
+        ClaudecodeConfig::from_view(provider)
+            .map(|config| config.client_identity)
+            .unwrap_or_default()
+    }
+
+    /// The user agent to send: the client's when it is a valid CLI agent
+    /// this identity accepts, otherwise the identity's own.
+    fn user_agent(self, client: Option<&str>) -> &str {
+        client
+            .filter(|value| {
+                parse_cli_user_agent(value).is_some_and(|ua| match self {
+                    Self::Cli => true,
+                    Self::AgentSdk => ua.agent_sdk && matches!(ua.entrypoint, "sdk-ts" | "sdk-py"),
+                })
+            })
+            .unwrap_or(self.default_user_agent())
+    }
+
+    /// The `cc_entrypoint` the billing block must carry, when the identity
+    /// forces one: the entrypoint of the user agent actually sent.
+    fn forced_entrypoint(self, user_agent: &str) -> Option<&str> {
+        match self {
+            Self::Cli => None,
+            Self::AgentSdk => parse_cli_user_agent(user_agent).map(|ua| ua.entrypoint),
+        }
+    }
 }
 
 impl Default for ClaudecodeConfig {
@@ -127,6 +204,9 @@ impl Default for ClaudecodeConfig {
             fallback_mode: FallbackMode::Off,
             fallback_models: Vec::new(),
             low_priority: false,
+            extended_usage: false,
+            client_identity: ClientIdentity::Cli,
+            identity_system_block: false,
         }
     }
 }
@@ -295,6 +375,7 @@ fn prev_req_key(session: &str) -> String {
 /// allow-list never hides these from the channel.
 pub const CLI_HEADERS: ChannelHeaders = ChannelHeaders {
     names: &[
+        usage_limit::HEADER,
         "anthropic-beta",
         "x-claude-code-session-id",
         "session_id",
@@ -306,6 +387,7 @@ pub const CLI_HEADERS: ChannelHeaders = ChannelHeaders {
 /// Headers the channel sets itself; a client cannot supply them. Cookies are
 /// claude.ai identity and never belong on an api.anthropic.com call.
 const CHANNEL_HEADERS: &[&str] = &[
+    usage_limit::HEADER,
     "anthropic-version",
     "anthropic-beta",
     "anthropic-dangerous-direct-browser-access",
@@ -336,7 +418,7 @@ const STATIC_HEADERS: &[(&str, &str)] = &[
     ("x-stainless-lang", "js"),
     ("x-stainless-package-version", "0.128.0"),
     ("x-stainless-runtime", "node"),
-    ("x-stainless-runtime-version", "v26.3.0"),
+    ("x-stainless-runtime-version", "v26.12.1"),
 ];
 
 #[cfg(target_arch = "wasm32")]
@@ -374,22 +456,62 @@ fn stainless_arch() -> &'static str {
     }
 }
 
+struct CliUserAgent<'a> {
+    entrypoint: &'a str,
+    agent_sdk: bool,
+}
+
 /// A client user agent is honoured only when it is the impersonated CLI
-/// version with a plausible entrypoint, e.g. `claude-cli/2.1.293 (external,
-/// sdk-cli)`; anything else becomes the CLI's own (v3 `auth.rs`).
-fn valid_cli_user_agent(value: &str) -> bool {
-    value
-        .strip_prefix("claude-cli/")
-        .and_then(|value| value.split_once(" (external, "))
-        .filter(|(version, _)| *version == CLI_VERSION)
-        .map(|(_, entrypoint)| entrypoint)
-        .and_then(|value| value.strip_suffix(')'))
-        .is_some_and(|entrypoint| {
-            !entrypoint.is_empty()
-                && entrypoint
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        })
+/// version in the CLI's `wU` grammar (v3 `auth.rs`): `claude-cli/{version} (external, {entrypoint}`,
+/// then optionally `, agent-sdk/{x.y.z}`, `, client-app/{app}` and
+/// `, workload/{token}` in that order, then `)`.
+fn parse_cli_user_agent(value: &str) -> Option<CliUserAgent<'_>> {
+    let token = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    };
+    let inner = value
+        .strip_prefix("claude-cli/")?
+        .strip_prefix(CLI_VERSION)?
+        .strip_prefix(" (external, ")?
+        .strip_suffix(')')?;
+    let mut parts = inner.split(", ");
+    let entrypoint = parts.next().filter(|value| token(value))?;
+    let mut agent_sdk = false;
+    let mut rank = 0;
+    for part in parts {
+        let (name, value) = part.split_once('/')?;
+        let (next, valid) = match name {
+            "agent-sdk" => (
+                1,
+                value.split('.').count() == 3
+                    && value.split('.').all(|n| {
+                        (1..=8).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit())
+                    }),
+            ),
+            "client-app" => (
+                2,
+                (1..=64).contains(&value.len())
+                    && value.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric()
+                            || matches!(byte, b'-' | b'_' | b'.' | b'@' | b'/')
+                    }),
+            ),
+            "workload" => (3, token(value)),
+            _ => return None,
+        };
+        if next <= rank || !valid {
+            return None;
+        }
+        rank = next;
+        agent_sdk |= next == 1;
+    }
+    Some(CliUserAgent {
+        entrypoint,
+        agent_sdk,
+    })
 }
 
 /// `oauth-2025-04-20` first, then every other beta already on the request.
@@ -415,7 +537,7 @@ fn apply_headers(
     config: &ClaudecodeConfig,
     access_token: &str,
     session_id: &str,
-    client_user_agent: Option<&str>,
+    user_agent: &str,
 ) -> Result<(), ChannelError> {
     headers.insert(
         header::AUTHORIZATION,
@@ -448,9 +570,6 @@ fn apply_headers(
         HeaderName::from_static("x-stainless-arch"),
         HeaderValue::from_static(stainless_arch()),
     );
-    let user_agent = client_user_agent
-        .filter(|value| valid_cli_user_agent(value))
-        .unwrap_or(CLI_USER_AGENT);
     headers.insert(header::USER_AGENT, header_value(user_agent)?);
     headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
     headers.insert(
@@ -550,13 +669,15 @@ impl BaseChannel for Claudecode {
         ChannelDescriptor {
             id: ID,
             display_name: "Claude Code (Claude.ai)",
-            login_modes: vec![LoginMode::AuthorizationCode, LoginMode::Cookie],
+            credential_kinds: vec!["oauth"],
+            login_modes: vec![LoginMode::AuthorizationCode],
             capabilities: ChannelCapabilities {
                 refresh: true,
                 quota_query: true,
                 quota_reset: true,
                 services: true,
-                websocket: false,
+                paid_usage: true,
+                ..Default::default()
             },
             config_keys: [
                 ConfigKey::optional(
@@ -577,7 +698,7 @@ impl BaseChannel for Claudecode {
                 ConfigKey::optional(
                     "claude_ai_url",
                     ConfigKeyKind::String,
-                    "The claude.ai origin the cookie login talks to.",
+                    "The claude.ai origin the cookie initialization talks to.",
                 ).with_placeholder(DEFAULT_CLAUDE_AI_URL),
                 ConfigKey::optional(
                     "headers",
@@ -602,7 +723,22 @@ impl BaseChannel for Claudecode {
                 ConfigKey::optional(
                     "low_priority",
                     ConfigKeyKind::Bool,
-                    "Send Messages calls in low-priority mode and keep routing to an account whose 5h window is full; the server decides whether the account is served.",
+                    "Accept lower-priority offers after a full 5h window and wait for capacity like Claude Code. Off by default; the server decides eligibility and budget.",
+                ),
+                ConfigKey::optional(
+                    "extended_usage",
+                    ConfigKeyKind::Bool,
+                    "Request extended usage grace for tool-result continuations unless paid extra usage is enabled. Off by default; the server decides whether grace is available.",
+                ),
+                ConfigKey::optional(
+                    "client_identity",
+                    ConfigKeyKind::String,
+                    "Client to present as: cli (default, interactive Claude Code) or agent_sdk (Claude Agent SDK: sdk-ts user agent and SDK billing turn fields).",
+                ),
+                ConfigKey::optional(
+                    "identity_system_block",
+                    ConfigKeyKind::Bool,
+                    "Place the client's identity system block after the billing block: Claude Code's for cli, the Agent SDK's for sdk-* entrypoints. Off by default.",
                 ),
             ]
             .into_iter()
@@ -615,10 +751,13 @@ impl BaseChannel for Claudecode {
         Some(default_connection())
     }
 
-    fn default_connection_for(&self, purpose: crate::channel::ConnectionPurpose) -> Option<ConnectionConfig> {
+    fn default_connection_for(
+        &self,
+        purpose: crate::channel::ConnectionPurpose,
+    ) -> Option<ConnectionConfig> {
         Some(match purpose {
             crate::channel::ConnectionPurpose::Request => default_connection(),
-            crate::channel::ConnectionPurpose::CookieLogin => super::shared::browser_connection(),
+            crate::channel::ConnectionPurpose::Browser => super::shared::browser_connection(),
         })
     }
 
@@ -654,19 +793,39 @@ impl BaseChannel for Claudecode {
         Box::pin(self.messages_http(Operation::StreamGenerateContent, context))
     }
 
+    fn validate_credential_secret(&self, secret: &Value) -> Result<(), ChannelError> {
+        if non_empty(secret.get("access_token")).is_some()
+            || non_empty(secret.get("refresh_token")).is_some()
+            || non_empty(secret.get("cookie"))
+                .and_then(cookie::normalize)
+                .is_some()
+        {
+            Ok(())
+        } else {
+            Err(ChannelError::InvalidCredential)
+        }
+    }
+
+    fn initial_credential_expiry(&self, secret: &Value) -> Option<i64> {
+        if non_empty(secret.get("access_token")).is_none() {
+            Some(0)
+        } else {
+            secret.get("expires_at_ms").and_then(Value::as_i64)
+        }
+    }
+
     fn credential_refresh(&self) -> Option<&dyn CredentialRefresh> {
         Some(self)
     }
     fn oauth_authorization_code(&self) -> Option<&dyn OAuthAuthorizationCode> {
         Some(self)
     }
-    fn cookie_login(&self) -> Option<&dyn CookieLogin> {
-        Some(self)
-    }
     fn quota_query(&self) -> Option<&dyn QuotaQuery> {
         Some(self)
     }
-    fn quota_reset(&self) -> Option<&dyn QuotaReset> { Some(self) }
+    fn quota_reset(&self) -> Option<&dyn QuotaReset> {
+        Some(self)
+    }
     fn quota_model(&self) -> Option<&dyn QuotaModel> {
         Some(self)
     }
@@ -716,18 +875,40 @@ impl Claudecode {
             &account.device_id,
             explicit_session(&source, allowlist.as_ref()),
         );
-        let client_user_agent = client_header(&source, allowlist.as_ref(), "user-agent");
+        let user_agent = config.client_identity.user_agent(client_header(
+            &source,
+            allowlist.as_ref(),
+            "user-agent",
+        ));
         let client_beta = client_header(&source, allowlist.as_ref(), "anthropic-beta")
             .and_then(|value| HeaderValue::from_str(value).ok());
+        let mut usage_mode = usage_limit::requested_mode(&source, &config);
         let mut headers = forwardable(&source, allowlist.as_ref(), CHANNEL_HEADERS);
-        if let Some(beta) = client_beta {
-            headers.insert(HeaderName::from_static("anthropic-beta"), beta);
+        match client_beta {
+            Some(beta) => {
+                headers.insert(HeaderName::from_static("anthropic-beta"), beta);
+            }
+            None if is_messages(operation) => {
+                headers.insert(
+                    HeaderName::from_static("anthropic-beta"),
+                    HeaderValue::from_static(MAIN_LOOP_BETAS),
+                );
+            }
+            None => {}
         }
 
         let body = match body {
             HttpBody::Bytes(bytes) if is_messages(operation) => {
                 match hygiene::json_object(&bytes) {
                     Some(mut value) => {
+                        if usage_mode.is_none()
+                            && config.extended_usage
+                            && usage_limit::is_continuation(&value)
+                            && !usage_limit::paid_usage_enabled(&ctx.credential)
+                        {
+                            usage_mode = Some(usage_limit::Mode::Extended);
+                        }
+                        claude_images::fit(&mut value, false);
                         hygiene::messages(
                             &mut value,
                             &mut headers,
@@ -745,6 +926,8 @@ impl Claudecode {
                             account.account_uuid.as_deref().unwrap_or_default(),
                             &session,
                             prev_req,
+                            config.client_identity.forced_entrypoint(user_agent),
+                            config.identity_system_block,
                         );
                         HttpBody::Bytes(Bytes::from(cch::serialize(&value)))
                     }
@@ -771,14 +954,16 @@ impl Claudecode {
             &config,
             account.access_token,
             &session,
-            client_user_agent,
+            user_agent,
         )?;
-        if config.low_priority && is_messages(operation) {
-            headers.insert(
-                HeaderName::from_static(USAGE_LIMIT_HEADER),
-                HeaderValue::from_static(LOW_PRIORITY),
-            );
-        }
+        usage_limit::set_mode(
+            &mut headers,
+            if is_messages(operation) {
+                usage_mode
+            } else {
+                None
+            },
+        );
         let mut builder = http::Request::builder().method(method).uri(uri);
         if let Some(map) = builder.headers_mut() {
             *map = headers;
@@ -793,6 +978,8 @@ impl Claudecode {
         operation: Operation,
         ctx: OperationContext<'_>,
     ) -> Result<WireResponse<HttpBody>, ChannelError> {
+        let config = ClaudecodeConfig::from_view(ctx.provider)?;
+        let explicit_usage = usage_limit::requested_mode(&ctx.request.headers, &config).is_some();
         let account = account(&ctx.credential)?;
         let allowlist = HeaderAllowlist::from_view_for(ctx.provider, CLI_HEADERS)?;
         let session = session_id(
@@ -820,7 +1007,15 @@ impl Claudecode {
             },
             prev_req.as_deref(),
         )?;
-        let response = ctx.client.send(request).await?;
+        let response = usage_limit::send(
+            &config,
+            ctx.client.as_ref(),
+            ctx.state.as_ref(),
+            &session,
+            request,
+            explicit_usage,
+        )
+        .await?;
         let request_id = response
             .headers
             .get("request-id")
@@ -854,20 +1049,7 @@ impl Claudecode {
 // ---------------------------------------------------------------- tokens
 
 pub(super) async fn read_body(body: HttpBody) -> Result<Bytes, ChannelError> {
-    match body {
-        HttpBody::Bytes(bytes) => Ok(bytes),
-        HttpBody::Stream(mut stream) => {
-            let mut out = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| invalid_response(e.to_string()))?;
-                out.extend_from_slice(&chunk);
-                if out.len() > MAX_SERVICE_BODY {
-                    return Err(invalid_response("service response exceeds the read limit"));
-                }
-            }
-            Ok(Bytes::from(out))
-        }
-    }
+    crate::channel::read_body(body).await
 }
 
 pub(super) async fn send(
@@ -892,14 +1074,34 @@ pub(super) async fn send(
     Ok((status, headers, read_body(body).await?))
 }
 
-fn json_headers() -> HeaderMap {
+/// Token endpoint headers as axios sends them in CLI 2.1.316.
+fn token_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
+    headers.insert(
+        header::ACCEPT,
+        HeaderValue::from_static("application/json, text/plain, */*"),
+    );
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
-    headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(header::USER_AGENT, HeaderValue::from_static(TOKEN_USER_AGENT));
+    headers.insert(
+        header::ACCEPT_ENCODING,
+        HeaderValue::from_static("gzip, compress, deflate, br"),
+    );
     headers
+}
+
+/// A JSON object of string fields in the given order; `json!` would sort the
+/// keys, while the CLI sends them in insertion order.
+fn ordered_json(fields: &[(&str, &str)]) -> Vec<u8> {
+    let body = fields
+        .iter()
+        .map(|(name, value)| format!("{}:{}", Value::from(*name), Value::from(*value)))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{{body}}}").into_bytes()
 }
 
 /// Percent-encode a query or form component; spaces become `%20` (v3
@@ -935,6 +1137,21 @@ pub(super) struct TokenResponse {
     /// Sent by the token endpoint on refresh (CLI 2.1.252 route inventory).
     pub refresh_token_expires_in: Option<i64>,
     pub scope: Option<String>,
+    /// Account facts the token endpoint returns with the tokens; the CLI
+    /// falls back to them when the profile is unavailable.
+    pub account: Option<TokenAccount>,
+    pub organization: Option<TokenOrganization>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TokenAccount {
+    pub uuid: Option<String>,
+    pub email_address: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TokenOrganization {
+    pub uuid: Option<String>,
 }
 
 fn expiry_ms(seconds: Option<i64>, default: Option<i64>) -> Option<i64> {
@@ -965,6 +1182,29 @@ pub(super) fn credential_from_tokens(
     };
     let expires_at_ms = expiry_ms(tokens.expires_in, Some(DEFAULT_EXPIRES_IN_SECS));
     let refresh_expires_at_ms = expiry_ms(tokens.refresh_token_expires_in, None);
+    for (name, value) in [
+        (
+            "account_uuid",
+            tokens.account.as_ref().and_then(|a| a.uuid.as_deref()),
+        ),
+        (
+            "user_email",
+            tokens
+                .account
+                .as_ref()
+                .and_then(|a| a.email_address.as_deref()),
+        ),
+        (
+            "organization_uuid",
+            tokens.organization.as_ref().and_then(|o| o.uuid.as_deref()),
+        ),
+    ] {
+        if let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) {
+            fields
+                .entry(name.into())
+                .or_insert_with(|| Value::String(value.into()));
+        }
+    }
     if !fields.contains_key("device_id") {
         let seed = json!({
             "refresh_token": refresh_token,
@@ -989,7 +1229,7 @@ pub(super) fn credential_from_tokens(
 }
 
 /// The secret persisted for this channel: the OAuth credential plus, after a
-/// cookie login, the normalized claude.ai cookie.
+/// cookie initialization, the normalized claude.ai cookie.
 pub(super) fn secret_json(
     credential: &OAuthCredential,
     cookie: Option<&str>,
@@ -1027,8 +1267,12 @@ pub(super) async fn enrich_profile(
         header::ACCEPT_ENCODING,
         HeaderValue::from_static("gzip, compress, deflate, br"),
     );
-    // The CLI fetches its profile through axios, not the Anthropic SDK.
-    headers.insert(header::USER_AGENT, HeaderValue::from_static("axios/1.13.6"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    // axios with the CLI's own user agent (2.1.316 capture).
+    headers.insert(
+        header::USER_AGENT,
+        HeaderValue::from_static(PROFILE_USER_AGENT),
+    );
     let Ok((status, _, bytes)) = send(
         client,
         Method::GET,
@@ -1124,19 +1368,60 @@ fn previous_scopes(secret: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The token endpoint's error code, at `error` (string), `error.code` or
-/// `error.type`.
-fn token_error_code(body: &[u8]) -> Option<String> {
-    let value: Value = serde_json::from_slice(body).ok()?;
-    match value.get("error")? {
-        Value::String(code) => Some(code.clone()),
-        Value::Object(error) => error
+/// The token endpoint's lowercased error code, at `error` (string),
+/// `error.code` or `error.type`, and its `error_description`.
+fn token_error(body: &[u8]) -> (Option<String>, Option<String>) {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return (None, None);
+    };
+    let code = match value.get("error") {
+        Some(Value::String(code)) => Some(code.clone()),
+        Some(Value::Object(error)) => error
             .get("code")
             .or_else(|| error.get("type"))
             .and_then(Value::as_str)
             .map(str::to_owned),
         _ => None,
+    };
+    let description = value
+        .get("error_description")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    (code.map(|c| c.to_ascii_lowercase()), description)
+}
+
+/// A failed refresh classified as CLI 2.1.302 does (`nQ`, `NUr`): an
+/// `account_on_hold` grant error (400/401/403) and a 400/401 `invalid_grant`
+/// are definitive; anything else is a failed attempt the host retries later.
+fn refresh_failure(status: StatusCode, body: Bytes) -> ChannelError {
+    let (code, description) = token_error(&body);
+    if matches!(status.as_u16(), 400 | 401 | 403)
+        && matches!(code.as_deref(), Some("invalid_grant" | "access_denied"))
+        && description.as_deref() == Some(ACCOUNT_ON_HOLD)
+    {
+        return ChannelError::RefreshRejected(ACCOUNT_ON_HOLD.into());
     }
+    if matches!(status.as_u16(), 400 | 401) && code.as_deref() == Some("invalid_grant") {
+        return ChannelError::RefreshRejected("invalid_grant".into());
+    }
+    ChannelError::UpstreamResponse { status, body }
+}
+
+/// One JSON `refresh_token` grant with the given scope.
+async fn request_refresh(
+    client: &dyn OutboundClient,
+    token_url: &str,
+    refresh_token: &str,
+    scope: &str,
+) -> Result<(StatusCode, Bytes), ChannelError> {
+    let body = ordered_json(&[
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", DEFAULT_CLIENT_ID),
+        ("scope", scope),
+    ]);
+    let (status, _, bytes) = send(client, Method::POST, token_url, token_headers(), Some(body)).await?;
+    Ok((status, bytes))
 }
 
 impl OAuthAuthorizationCode for Claudecode {
@@ -1182,20 +1467,20 @@ impl OAuthAuthorizationCode for Claudecode {
     ) -> OperationFuture<'a, OAuthCredential> {
         Box::pin(async move {
             let config = ClaudecodeConfig::from_view(context.provider)?;
-            let body = json!({
-                "grant_type": "authorization_code",
-                "client_id": DEFAULT_CLIENT_ID,
-                "code": grant.code,
-                "redirect_uri": grant.redirect_uri,
-                "code_verifier": grant.code_verifier,
-                "state": grant.state,
-            });
+            let body = ordered_json(&[
+                ("grant_type", "authorization_code"),
+                ("code", grant.code),
+                ("redirect_uri", grant.redirect_uri),
+                ("client_id", DEFAULT_CLIENT_ID),
+                ("code_verifier", grant.code_verifier),
+                ("state", grant.state),
+            ]);
             let (status, _, bytes) = send(
                 context.client,
                 Method::POST,
                 &config.token_url,
-                json_headers(),
-                Some(body.to_string().into_bytes()),
+                token_headers(),
+                Some(body),
             )
             .await?;
             if !status.is_success() {
@@ -1223,9 +1508,25 @@ impl OAuthAuthorizationCode for Claudecode {
 }
 
 impl CredentialRefresh for Claudecode {
-    fn connection_purpose(&self, credential: &CredentialView<'_>) -> crate::channel::ConnectionPurpose {
-        if non_empty(credential.secret.get("refresh_token")).is_none() && non_empty(credential.secret.get("cookie")).is_some() {
-            crate::channel::ConnectionPurpose::CookieLogin
+    /// A suspended account keeps its refresh token for an appeal: remember
+    /// the rejection for this version only, as the CLI does in memory.
+    fn persist_rejection(&self, reason: &str) -> bool {
+        reason != ACCOUNT_ON_HOLD
+    }
+
+    fn supports(&self, credential: &CredentialView<'_>) -> bool {
+        non_empty(credential.secret.get("refresh_token")).is_some()
+            || non_empty(credential.secret.get("cookie")).is_some()
+    }
+
+    fn connection_purpose(
+        &self,
+        credential: &CredentialView<'_>,
+    ) -> crate::channel::ConnectionPurpose {
+        if non_empty(credential.secret.get("refresh_token")).is_none()
+            && non_empty(credential.secret.get("cookie")).is_some()
+        {
+            crate::channel::ConnectionPurpose::Browser
         } else {
             crate::channel::ConnectionPurpose::Request
         }
@@ -1257,36 +1558,29 @@ impl CredentialRefresh for Claudecode {
                     scopes.push(scope);
                 }
             }
-            let body = json!({
-                "grant_type": "refresh_token",
-                "client_id": DEFAULT_CLIENT_ID,
-                "refresh_token": refresh_token,
-                "scope": scopes.join(" "),
-            });
-            let (status, _, bytes) = send(
+            let (mut status, mut bytes) = request_refresh(
                 context.client,
-                Method::POST,
                 &config.token_url,
-                json_headers(),
-                Some(body.to_string().into_bytes()),
+                refresh_token,
+                &scopes.join(" "),
             )
             .await?;
+            // CLI 2.1.302: a credential granted `user:inference` retries an
+            // `invalid_scope` rejection with exactly the scopes it holds.
+            if status == StatusCode::BAD_REQUEST
+                && stored.iter().any(|scope| scope == "user:inference")
+                && token_error(&bytes).0.as_deref() == Some("invalid_scope")
+            {
+                (status, bytes) = request_refresh(
+                    context.client,
+                    &config.token_url,
+                    refresh_token,
+                    &stored.join(" "),
+                )
+                .await?;
+            }
             if !status.is_success() {
-                let code = token_error_code(&bytes).map(|c| c.to_ascii_lowercase());
-                // The CLI treats `invalid_grant` as "log in again"
-                // (`samples/claude-code-2.1.252/ANALYSIS.md`); a bare 401
-                // means the refresh token itself was refused.
-                let definitive = status == StatusCode::UNAUTHORIZED
-                    || (status.is_client_error() && code.as_deref() == Some("invalid_grant"));
-                if definitive {
-                    return Err(ChannelError::RefreshRejected(
-                        code.unwrap_or_else(|| format!("http {}", status.as_u16())),
-                    ));
-                }
-                return Err(ChannelError::UpstreamResponse {
-                    status,
-                    body: bytes,
-                });
+                return Err(refresh_failure(status, bytes));
             }
             let tokens: TokenResponse =
                 serde_json::from_slice(&bytes).map_err(|e| invalid_response(e.to_string()))?;
@@ -1297,34 +1591,18 @@ impl CredentialRefresh for Claudecode {
                 previous_fields(secret),
             )?;
             Ok(CredentialUpdate {
+                metadata: Some({
+                    let mut metadata = context
+                        .credential
+                        .metadata
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default();
+                    metadata.extend(credential.provider_fields.clone());
+                    Value::Object(metadata)
+                }),
                 expires_at_ms: credential.expires_at_ms,
                 secret: secret_json(&credential, cookie)?,
-            })
-        })
-    }
-}
-
-impl CookieLogin for Claudecode {
-    fn exchange_cookie<'a>(
-        &'a self,
-        context: LoginContext<'a>,
-        cookie: &'a str,
-    ) -> OperationFuture<'a, crate::channel::AcquiredCredential> {
-        Box::pin(async move {
-            let config = ClaudecodeConfig::from_view(context.provider)?;
-            let (credential, cookie) =
-                cookie::exchange(context.client, context.provider, &config, cookie).await?;
-            let metadata = Value::Object(
-                credential
-                    .provider_fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<Map<_, _>>(),
-            );
-            Ok(crate::channel::AcquiredCredential {
-                expires_at_ms: credential.expires_at_ms,
-                secret: secret_json(&credential, Some(&cookie))?,
-                metadata,
             })
         })
     }

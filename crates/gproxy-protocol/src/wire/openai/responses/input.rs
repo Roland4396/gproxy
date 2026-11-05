@@ -49,6 +49,7 @@ where
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseConversationParam {
     pub id: String,
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
@@ -59,6 +60,7 @@ pub struct ResponseConversationParam {
 #[serde(untagged)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConversationParam {
     Id(String),
     Object(ResponseConversationParam),
@@ -68,6 +70,7 @@ pub enum ConversationParam {
 #[serde(untagged)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Input {
     Text(String),
     Items(Vec<InputItem>),
@@ -77,6 +80,7 @@ pub enum Input {
 #[serde(untagged)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum MessageContent {
     Text(String),
     Parts(Vec<InputContent>),
@@ -86,6 +90,7 @@ pub enum MessageContent {
 #[serde(untagged)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputContent {
     #[serde(rename = "input_text")]
     Text(ResponseInputText),
@@ -101,6 +106,7 @@ pub enum InputContent {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputText {
     #[serde(rename = "type")]
     pub type_: ResponseInputTextType,
@@ -121,6 +127,7 @@ pub struct ResponseInputText {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputImage {
     #[serde(rename = "type")]
     pub type_: ResponseInputImageType,
@@ -153,6 +160,7 @@ pub struct ResponseInputImage {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseInputFile {
     #[serde(rename = "type")]
     pub type_: ResponseInputFileType,
@@ -202,10 +210,28 @@ pub struct ResponseInputFile {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PromptCacheBreakpoint {
     pub mode: PromptCacheMode,
+    /// Minimum lifetime of this breakpoint; omitted inherits the request TTL.
+    /// OpenAI OpenAPI: PromptCacheBreakpointParam (2026-10-21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<PromptCacheBreakpointTtl>,
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
     pub rest: Rest,
+}
+
+/// Explicit cache-breakpoint lifetimes from OpenAI's PromptCacheBreakpointParam.
+/// Separate from the request-wide PromptCacheTTLEnum and legacy retention policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum PromptCacheBreakpointTtl {
+    #[serde(rename = "30m")]
+    ThirtyMinutes,
+    #[serde(rename = "12h")]
+    TwelveHours,
 }
 
 #[derive(
@@ -214,6 +240,7 @@ pub struct PromptCacheBreakpoint {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct EasyInputMessage {
     #[serde(
         default,
@@ -246,6 +273,7 @@ pub struct EasyInputMessage {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputMessage {
     #[serde(
         default,
@@ -276,6 +304,7 @@ pub struct InputMessage {
 #[serde(untagged)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputItem {
     MultiAgentCall(super::multi_agent::MultiAgentCall),
     MultiAgentCallOutput(super::multi_agent::MultiAgentCallOutput),
@@ -399,6 +428,7 @@ where
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseOutputText {
     #[serde(rename = "type")]
     pub type_: ResponseOutputTextType,
@@ -411,6 +441,7 @@ pub struct ResponseOutputText {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OutputAnnotation {
     File(FileCitation),
     Url(UrlCitation),
@@ -418,6 +449,7 @@ pub enum OutputAnnotation {
     Path(FilePath),
 }
 macro_rules! citation { ($name:ident { $($field:tt)* }) => { #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)] #[serde(rename_all = "snake_case")] #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct $name { $($field)* #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")] pub rest: Rest } }; }
 citation!(FileCitation { pub file_id: String, pub filename: String, pub index: i64, #[serde(rename = "type")] pub type_: FileCitationType, });
 citation!(UrlCitation { pub end_index: i64, pub start_index: i64, pub title: String, pub url: String, #[serde(rename = "type")] pub type_: UrlCitationType, });
@@ -433,6 +465,7 @@ citation!(FilePath { pub file_id: String, pub index: i64, #[serde(rename = "type
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FileCitationType {
     #[serde(rename = "file_citation")]
     FileCitation,
@@ -447,6 +480,7 @@ pub enum FileCitationType {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum UrlCitationType {
     #[serde(rename = "url_citation")]
     UrlCitation,
@@ -461,6 +495,7 @@ pub enum UrlCitationType {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ContainerFileCitationType {
     #[serde(rename = "container_file_citation")]
     ContainerFileCitation,
@@ -475,6 +510,7 @@ pub enum ContainerFileCitationType {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FilePathType {
     #[serde(rename = "file_path")]
     FilePath,
@@ -484,6 +520,7 @@ pub enum FilePathType {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OutputLogprob {
     pub token: String,
     pub bytes: Vec<i64>,
@@ -497,6 +534,7 @@ pub struct OutputLogprob {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TopLogprob {
     pub token: String,
     pub bytes: Vec<i64>,
@@ -510,6 +548,7 @@ pub struct TopLogprob {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseOutputRefusal {
     #[serde(rename = "type")]
     pub type_: ResponseOutputRefusalType,
@@ -523,6 +562,7 @@ pub struct ResponseOutputRefusal {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FunctionCall {
     #[serde(
         default,
@@ -571,6 +611,7 @@ pub struct FunctionCall {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FunctionCallOutput {
     #[serde(
         default,
@@ -580,7 +621,12 @@ pub struct FunctionCallOutput {
     pub agent: Option<Option<super::multi_agent::Agent>>,
     #[serde(rename = "type")]
     pub type_: FunctionCallOutputType,
-    pub call_id: String,
+    #[serde(
+        default,
+        deserialize_with = "present_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub call_id: Option<Option<String>>,
     pub output: FunctionOutput,
     #[serde(
         default,
@@ -619,6 +665,7 @@ pub struct FunctionCallOutput {
 #[serde(untagged)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FunctionOutput {
     Text(String),
     Content(Vec<FunctionOutputContent>),
@@ -626,6 +673,7 @@ pub enum FunctionOutput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FunctionOutputContent {
     Text(FunctionOutputText),
     Image(FunctionOutputImage),
@@ -636,6 +684,7 @@ pub enum FunctionOutputContent {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FunctionOutputImage {
     #[serde(rename = "type")]
     pub type_: ResponseInputImageType,
@@ -671,6 +720,7 @@ pub struct FunctionOutputImage {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FunctionOutputFile {
     #[serde(rename = "type")]
     pub type_: ResponseInputFileType,
@@ -720,6 +770,7 @@ pub struct FunctionOutputFile {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReasoningConfig {
     #[serde(
         default,
@@ -760,6 +811,7 @@ pub struct ReasoningConfig {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReasoningItem {
     #[serde(
         default,
@@ -797,6 +849,7 @@ pub struct ReasoningItem {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReasoningContent {
     #[serde(rename = "type")]
     pub type_: ReasoningTextType,
@@ -814,6 +867,7 @@ pub struct ReasoningContent {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReasoningTextType {
     #[serde(rename = "reasoning_text")]
     ReasoningText,
@@ -828,6 +882,7 @@ pub enum ReasoningTextType {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReasoningStatus {
     #[serde(rename = "in_progress")]
     InProgress,
@@ -842,6 +897,7 @@ pub enum ReasoningStatus {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SummaryText {
     #[serde(rename = "type")]
     pub type_: SummaryTextType,
@@ -855,6 +911,7 @@ pub struct SummaryText {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ItemReference {
     #[serde(
         default,
@@ -879,6 +936,7 @@ pub struct ItemReference {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Compaction {
     #[serde(
         default,
@@ -905,6 +963,7 @@ pub struct Compaction {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PendingSafetyCheck {
     pub id: String,
     #[serde(
@@ -926,6 +985,7 @@ pub struct PendingSafetyCheck {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Caller {
     #[serde(rename = "direct")]
     Direct(DirectCaller),
@@ -942,6 +1002,7 @@ pub enum Caller {
     gproxy_protocol_macros::WireBuilder,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DirectCaller {
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
     pub rest: Rest,
@@ -956,6 +1017,7 @@ pub struct DirectCaller {
     gproxy_protocol_macros::WireBuilder,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProgramCaller {
     pub caller_id: String,
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
@@ -966,6 +1028,7 @@ pub struct ProgramCaller {
 #[serde(tag = "type")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ComputerAction {
     #[serde(rename = "click")]
     Click(ClickAction),
@@ -996,14 +1059,17 @@ pub enum ComputerAction {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ComputerScreenshotType {
     #[serde(rename = "computer_screenshot")]
     ComputerScreenshot,
 }
 macro_rules! action_struct { ($name:ident { $($field:tt)* }) => { #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)] #[serde(rename_all = "snake_case")] #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)] #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct $name { $($field)* #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")] pub rest: Rest } }; }
 action_struct!(ClickAction { pub button: ClickButton, pub x: i64, pub y: i64, #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub keys: Option<Option<Vec<String>>>, });
-action_struct!(DoubleClickAction { pub x: i64, pub y: i64, #[wire(required)] #[serde(deserialize_with = "required_nullable")] pub keys: Option<Vec<String>>, });
+action_struct!(DoubleClickAction { pub x: i64, pub y: i64, #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))] #[serde(deserialize_with = "required_nullable")] pub keys: Option<Vec<String>>, });
 action_struct!(DragAction { pub path: Vec<Coordinate>, #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub keys: Option<Option<Vec<String>>>, });
 action_struct!(KeypressAction { pub keys: Vec<String>, });
 action_struct!(MoveAction { pub x: i64, pub y: i64, #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub keys: Option<Option<Vec<String>>>, });
@@ -1019,6 +1085,7 @@ pub type ComputerToolCallOutput = ComputerScreenshot;
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ComputerScreenshot {
     #[serde(rename = "type")]
     pub type_: ComputerScreenshotType,
@@ -1047,6 +1114,7 @@ pub struct ComputerScreenshot {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ClickButton {
     #[serde(rename = "left")]
     Left,
@@ -1063,6 +1131,7 @@ pub enum ClickButton {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WebSearchAction {
     #[serde(rename = "search")]
     Search(WebSearchQuery),
@@ -1083,15 +1152,17 @@ action_struct!(WebSearchSource { #[serde(rename = "type")] pub type_: WebSearchS
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WebSearchSourceType {
     #[serde(rename = "url")]
     Url,
 }
 action_struct!(WebSearchOpenPage { #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub url: Option<Option<String>>, });
-action_struct!(WebSearchFindInPage { pub pattern: String, pub url: String, });
+action_struct!(WebSearchFindInPage { pub pattern: String, #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub url: Option<Option<String>>, });
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CodeInterpreterOutput {
     #[serde(rename = "logs")]
     Logs(CodeLogs),
@@ -1107,6 +1178,7 @@ action_struct!(CodeImage { pub url: String, });
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ComputerCall {
     #[serde(
         default,
@@ -1141,6 +1213,7 @@ pub struct ComputerCall {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ComputerCallOutput {
     #[serde(
         default,
@@ -1179,6 +1252,7 @@ pub struct ComputerCallOutput {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct WebSearchCall {
     #[serde(
         default,
@@ -1206,6 +1280,7 @@ pub struct WebSearchCall {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FileSearchCall {
     #[serde(
         default,
@@ -1232,6 +1307,7 @@ pub struct FileSearchCall {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FileSearchResult {
     #[serde(
         default,
@@ -1272,7 +1348,14 @@ pub struct FileSearchResult {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ImageGenerationCall {
+    #[serde(
+        default,
+        deserialize_with = "present_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub error: Option<super::errors::ImageGenerationCallError>,
     #[serde(
         default,
         deserialize_with = "present_nullable",
@@ -1320,6 +1403,7 @@ pub struct ImageGenerationCall {
     pub type_: ImageGenerationCallType,
     pub id: String,
     #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))]
     #[serde(deserialize_with = "required_nullable")]
     pub result: Option<String>,
     pub status: ImageGenerationStatus,
@@ -1332,6 +1416,7 @@ pub struct ImageGenerationCall {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CodeInterpreterCall {
     #[serde(
         default,
@@ -1343,10 +1428,12 @@ pub struct CodeInterpreterCall {
     pub type_: CodeInterpreterCallType,
     pub id: String,
     #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))]
     #[serde(deserialize_with = "required_nullable")]
     pub code: Option<String>,
     pub container_id: String,
     #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))]
     #[serde(deserialize_with = "required_nullable")]
     pub outputs: Option<Vec<CodeInterpreterOutput>>,
     pub status: CodeInterpreterStatus,
@@ -1359,6 +1446,7 @@ pub struct CodeInterpreterCall {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CustomToolCall {
     #[serde(
         default,
@@ -1401,6 +1489,7 @@ pub struct CustomToolCall {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CustomToolCallOutput {
     #[serde(
         default,
@@ -1434,6 +1523,7 @@ pub struct CustomToolCallOutput {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseOutputMessage {
     #[serde(
         default,
@@ -1460,6 +1550,7 @@ pub struct ResponseOutputMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OutputContent {
     Text(ResponseOutputText),
     Refusal(ResponseOutputRefusal),
@@ -1468,6 +1559,7 @@ pub enum OutputContent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OutputMessageRole {
     #[serde(rename = "assistant")]
     Assistant,
@@ -1475,6 +1567,7 @@ pub enum OutputMessageRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OutputMessageStatus {
     #[serde(rename = "in_progress")]
     InProgress,
@@ -1490,6 +1583,7 @@ macro_rules! simple_item {
         #[serde(rename_all = "snake_case")]
         #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
         #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct $name { #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub agent: Option<Option<super::multi_agent::Agent>>, $($field)* #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")] pub rest: Rest }
     };
 }
@@ -1571,7 +1665,7 @@ simple_item!(McpCall {
     #[serde(rename = "type")] pub type_: McpCallType,
     pub id: String, pub arguments: String, pub name: String, pub server_label: String,
     #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub approval_request_id: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub error: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub error: Option<Option<super::errors::McpToolCallError>>,
     #[serde(default, deserialize_with = "present_nullable", skip_serializing_if = "Option::is_none")] pub output: Option<Option<String>>,
     #[serde(default, deserialize_with = "present_optional", skip_serializing_if = "Option::is_none")] pub status: Option<McpCallStatus>,
 });
@@ -1591,6 +1685,7 @@ simple_item!(ProgramOutput {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct McpToolDefinition {
     pub name: String,
     // Get input token counts.md:3757: unknown schema, not a fixed wire object.
@@ -1618,6 +1713,7 @@ pub struct McpToolDefinition {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LocalShellAction {
     pub command: Vec<String>,
     pub env: std::collections::BTreeMap<String, String>,
@@ -1650,6 +1746,7 @@ pub struct LocalShellAction {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ShellAction {
     pub commands: Vec<String>,
     #[serde(
@@ -1670,6 +1767,7 @@ pub struct ShellAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ApplyPatchOperation {
     #[serde(rename = "create_file")]
     Create(ApplyPatchCreate),
@@ -1686,6 +1784,7 @@ action_struct!(ApplyPatchUpdate { pub path: String, pub diff: String, });
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ShellOutputContent {
     pub stdout: String,
     pub stderr: String,
@@ -1696,6 +1795,7 @@ pub struct ShellOutputContent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ShellOutputOutcome {
     #[serde(rename = "timeout")]
     Timeout(ShellTimeout),
@@ -1711,6 +1811,7 @@ action_struct!(ShellExit { pub exit_code: i64, });
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TextConfig {
     #[serde(
         default,
@@ -1731,6 +1832,7 @@ pub struct TextConfig {
 #[serde(tag = "type")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum TextFormat {
     #[serde(rename = "text")]
     Text(TextFormatText),
@@ -1745,6 +1847,7 @@ pub enum TextFormat {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TextFormatText {
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
     pub rest: Rest,
@@ -1755,6 +1858,7 @@ pub struct TextFormatText {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TextFormatJsonSchema {
     pub name: String,
     // Get input token counts.md:4246: user-provided map[unknown] JSON Schema.
@@ -1780,6 +1884,7 @@ pub struct TextFormatJsonSchema {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TextFormatJsonObject {
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
     pub rest: Rest,
@@ -1789,6 +1894,7 @@ pub struct TextFormatJsonObject {
 #[serde(untagged)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoice {
     Mode(ToolChoiceMode),
     Allowed(ToolChoiceAllowed),
@@ -1806,6 +1912,7 @@ pub enum ToolChoice {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceHosted {
     #[serde(rename = "type")]
     pub type_: ToolChoiceHostedType,
@@ -1823,6 +1930,7 @@ pub struct ToolChoiceHosted {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceHostedType {
     #[serde(rename = "file_search")]
     FileSearch,
@@ -1847,6 +1955,7 @@ pub enum ToolChoiceHostedType {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceAllowed {
     #[serde(rename = "type")]
     pub type_: ToolChoiceAllowedType,
@@ -1862,6 +1971,7 @@ pub struct ToolChoiceAllowed {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceFunction {
     #[serde(rename = "type")]
     pub type_: ToolChoiceFunctionType,
@@ -1874,6 +1984,7 @@ pub struct ToolChoiceFunction {
 )]
 #[serde(rename_all = "snake_case")]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceMcp {
     #[serde(rename = "type")]
     pub type_: ToolChoiceMcpType,
@@ -1893,6 +2004,7 @@ pub struct ToolChoiceMcp {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceCustom {
     #[serde(rename = "type")]
     pub type_: ToolChoiceCustomType,
@@ -1904,6 +2016,7 @@ pub struct ToolChoiceCustom {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputTextType {
     #[serde(rename = "input_text")]
     ResponseInputText,
@@ -1912,6 +2025,7 @@ pub enum ResponseInputTextType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputImageType {
     #[serde(rename = "input_image")]
     ResponseInputImage,
@@ -1920,6 +2034,7 @@ pub enum ResponseInputImageType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseInputFileType {
     #[serde(rename = "input_file")]
     ResponseInputFile,
@@ -1928,6 +2043,7 @@ pub enum ResponseInputFileType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FunctionCallType {
     #[serde(rename = "function_call")]
     FunctionCall,
@@ -1936,6 +2052,7 @@ pub enum FunctionCallType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FunctionCallOutputType {
     #[serde(rename = "function_call_output")]
     FunctionCallOutput,
@@ -1944,6 +2061,7 @@ pub enum FunctionCallOutputType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReasoningItemType {
     #[serde(rename = "reasoning")]
     ReasoningItem,
@@ -1952,6 +2070,7 @@ pub enum ReasoningItemType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ItemReferenceType {
     #[serde(rename = "item_reference")]
     ItemReference,
@@ -1960,6 +2079,7 @@ pub enum ItemReferenceType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CompactionType {
     #[serde(rename = "compaction")]
     Compaction,
@@ -1968,6 +2088,7 @@ pub enum CompactionType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ComputerCallType {
     #[serde(rename = "computer_call")]
     ComputerCall,
@@ -1976,6 +2097,7 @@ pub enum ComputerCallType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ComputerCallOutputType {
     #[serde(rename = "computer_call_output")]
     ComputerCallOutput,
@@ -1984,6 +2106,7 @@ pub enum ComputerCallOutputType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WebSearchCallType {
     #[serde(rename = "web_search_call")]
     WebSearchCall,
@@ -1992,6 +2115,7 @@ pub enum WebSearchCallType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FileSearchCallType {
     #[serde(rename = "file_search_call")]
     FileSearchCall,
@@ -2000,6 +2124,7 @@ pub enum FileSearchCallType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ImageGenerationCallType {
     #[serde(rename = "image_generation_call")]
     ImageGenerationCall,
@@ -2008,6 +2133,7 @@ pub enum ImageGenerationCallType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CodeInterpreterCallType {
     #[serde(rename = "code_interpreter_call")]
     CodeInterpreterCall,
@@ -2016,6 +2142,7 @@ pub enum CodeInterpreterCallType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CustomToolCallType {
     #[serde(rename = "custom_tool_call")]
     CustomToolCall,
@@ -2024,6 +2151,7 @@ pub enum CustomToolCallType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CustomToolCallOutputType {
     #[serde(rename = "custom_tool_call_output")]
     CustomToolCallOutput,
@@ -2032,6 +2160,7 @@ pub enum CustomToolCallOutputType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SummaryTextType {
     #[serde(rename = "summary_text")]
     SummaryText,
@@ -2040,6 +2169,7 @@ pub enum SummaryTextType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseOutputTextType {
     #[serde(rename = "output_text")]
     ResponseOutputText,
@@ -2048,6 +2178,7 @@ pub enum ResponseOutputTextType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseOutputRefusalType {
     #[serde(rename = "refusal")]
     ResponseOutputRefusal,
@@ -2056,6 +2187,7 @@ pub enum ResponseOutputRefusalType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceAllowedType {
     #[serde(rename = "allowed_tools")]
     ToolChoiceAllowed,
@@ -2064,6 +2196,7 @@ pub enum ToolChoiceAllowedType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceFunctionType {
     #[serde(rename = "function")]
     ToolChoiceFunction,
@@ -2072,6 +2205,7 @@ pub enum ToolChoiceFunctionType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceMcpType {
     #[serde(rename = "mcp")]
     ToolChoiceMcp,
@@ -2080,6 +2214,7 @@ pub enum ToolChoiceMcpType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceCustomType {
     #[serde(rename = "custom")]
     ToolChoiceCustom,
@@ -2090,6 +2225,7 @@ macro_rules! item_tag {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
         #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
         #[derive(gproxy_protocol_macros::DeclaredFields)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
         pub enum $name {
             #[serde(rename = $wire)]
             $variant,
@@ -2143,6 +2279,7 @@ item_tag!(LocalShellActionType, Exec, "exec");
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ProgramOutputStatus {
     #[serde(rename = "completed")]
     Completed,
@@ -2159,6 +2296,7 @@ pub enum ProgramOutputStatus {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ItemStatus {
     #[serde(rename = "in_progress")]
     InProgress,
@@ -2171,6 +2309,7 @@ pub enum ItemStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum MessageType {
     #[serde(rename = "message")]
     Message,
@@ -2186,6 +2325,7 @@ pub enum MessageType {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum MessagePhase {
     #[serde(rename = "commentary")]
     Commentary,
@@ -2196,6 +2336,7 @@ pub enum MessagePhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum MessageRole {
     #[serde(rename = "user")]
     User,
@@ -2210,6 +2351,7 @@ pub enum MessageRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputMessageRole {
     #[serde(rename = "user")]
     User,
@@ -2228,6 +2370,7 @@ pub enum InputMessageRole {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum AdditionalToolsRole {
     #[serde(rename = "developer")]
     Developer,
@@ -2236,6 +2379,7 @@ pub enum AdditionalToolsRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceMode {
     #[serde(rename = "none")]
     None,
@@ -2248,6 +2392,7 @@ pub enum ToolChoiceMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum AllowedToolChoiceMode {
     #[serde(rename = "auto")]
     Auto,
@@ -2260,6 +2405,7 @@ pub enum AllowedToolChoiceMode {
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceProgrammatic {
     #[serde(rename = "type")]
     pub type_: ToolChoiceProgrammaticType,
@@ -2270,6 +2416,7 @@ pub struct ToolChoiceProgrammatic {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceProgrammaticType {
     #[serde(rename = "programmatic_tool_calling")]
     Tag,
@@ -2280,6 +2427,7 @@ pub enum ToolChoiceProgrammaticType {
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceApplyPatch {
     #[serde(rename = "type")]
     pub type_: ToolChoiceApplyPatchType,
@@ -2290,6 +2438,7 @@ pub struct ToolChoiceApplyPatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceApplyPatchType {
     #[serde(rename = "apply_patch")]
     Tag,
@@ -2300,6 +2449,7 @@ pub enum ToolChoiceApplyPatchType {
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolChoiceShell {
     #[serde(rename = "type")]
     pub type_: ToolChoiceShellType,
@@ -2310,6 +2460,7 @@ pub struct ToolChoiceShell {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolChoiceShellType {
     #[serde(rename = "shell")]
     Tag,
@@ -2327,6 +2478,7 @@ pub enum ToolChoiceShellType {
     gproxy_protocol_macros::WireBuilder,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FunctionOutputText {
     #[serde(rename = "type")]
     pub type_: ResponseInputTextType,
@@ -2344,6 +2496,7 @@ pub struct FunctionOutputText {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CustomOutput {
     Text(String),
     Content(Vec<InputContent>),
@@ -2352,6 +2505,7 @@ pub enum CustomOutput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ShellCallEnvironment {
     Local(ShellLocalEnvironment),
     Reference(ShellContainerReference),
@@ -2360,6 +2514,7 @@ pub enum ShellCallEnvironment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FileAttributeValue {
     Text(String),
     Number(serde_json::Number),
@@ -2370,6 +2525,7 @@ pub enum FileAttributeValue {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ImageDetail {
     Low,
     High,
@@ -2381,6 +2537,7 @@ pub enum ImageDetail {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FileDetail {
     Auto,
     Low,
@@ -2391,6 +2548,7 @@ pub enum FileDetail {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum PromptCacheMode {
     Explicit,
 }
@@ -2399,17 +2557,20 @@ pub enum PromptCacheMode {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WebSearchStatus {
     InProgress,
     Searching,
     Completed,
     Failed,
+    Incomplete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FileSearchStatus {
     InProgress,
     Searching,
@@ -2422,6 +2583,7 @@ pub enum FileSearchStatus {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ImageGenerationStatus {
     InProgress,
     Completed,
@@ -2433,6 +2595,7 @@ pub enum ImageGenerationStatus {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CodeInterpreterStatus {
     InProgress,
     Completed,
@@ -2445,6 +2608,7 @@ pub enum CodeInterpreterStatus {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ApplyPatchStatus {
     InProgress,
     Completed,
@@ -2454,6 +2618,7 @@ pub enum ApplyPatchStatus {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ApplyPatchOutputStatus {
     Completed,
     Failed,
@@ -2463,6 +2628,7 @@ pub enum ApplyPatchOutputStatus {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum McpCallStatus {
     InProgress,
     Completed,
@@ -2475,6 +2641,7 @@ pub enum McpCallStatus {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReasoningEffort {
     None,
     Minimal,
@@ -2492,6 +2659,7 @@ pub enum ReasoningEffort {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReasoningSummary {
     Auto,
     Concise,
@@ -2502,6 +2670,7 @@ pub enum ReasoningSummary {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReasoningContext {
     Auto,
     CurrentTurn,
@@ -2512,6 +2681,7 @@ pub enum ReasoningContext {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum TextVerbosity {
     Low,
     Medium,
@@ -2530,6 +2700,7 @@ pub enum TextVerbosity {
 )]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConfigurationUpdateType {
     ConfigurationUpdate,
 }
@@ -2545,6 +2716,7 @@ pub enum ConfigurationUpdateType {
     gproxy_protocol_macros::DeclaredFields,
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigurationUpdate {
     #[serde(
         default,
@@ -2577,6 +2749,7 @@ pub struct ConfigurationUpdate {
     gproxy_protocol_macros::DeclaredFields,
 )]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigurationReasoning {
     #[serde(
         default,

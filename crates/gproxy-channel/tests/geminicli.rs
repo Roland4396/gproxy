@@ -704,7 +704,6 @@ async fn authorize_builds_the_google_consent_url() {
         "response_type=code",
         &format!("client_id={DEFAULT_CLIENT_ID}"),
         "access_type=offline",
-        "prompt=consent",
         "code_challenge_method=S256",
         "code_challenge=ch-1",
         "state=st-1",
@@ -715,6 +714,8 @@ async fn authorize_builds_the_google_consent_url() {
             start.authorize_url
         );
     }
+    // The CLI's user-code flow sends no `prompt`.
+    assert!(!start.authorize_url.contains("prompt="));
 }
 
 #[tokio::test]
@@ -725,11 +726,10 @@ async fn the_exchange_discovers_the_project_and_tier_for_the_host_to_persist() {
             json!({"access_token": "ya29.new", "refresh_token": "1//r", "expires_in": 3599,
                    "scope": "https://www.googleapis.com/auth/cloud-platform"}),
         ),
-        // loadCodeAssist knows the account but not its project.
+        // loadCodeAssist knows no tier and no project for the account yet.
         reply(
             StatusCode::OK,
-            json!({"currentTier": {"id": "free-tier"},
-                   "allowedTiers": [{"id": "standard-tier", "isDefault": true}]}),
+            json!({"allowedTiers": [{"id": "free-tier", "isDefault": true}]}),
         ),
         // onboardUser completes and names it.
         reply(
@@ -786,7 +786,7 @@ async fn the_exchange_discovers_the_project_and_tier_for_the_host_to_persist() {
     assert_eq!(load["metadata"]["pluginType"], "GEMINI");
     assert!(sent[2].1.ends_with("/v1internal:onboardUser"));
     let onboard: Value = serde_json::from_slice(&sent[2].3).unwrap();
-    assert_eq!(onboard["tierId"], "standard-tier");
+    assert_eq!(onboard["tierId"], "free-tier");
 }
 
 #[tokio::test]

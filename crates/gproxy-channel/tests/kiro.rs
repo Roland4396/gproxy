@@ -514,7 +514,15 @@ async fn the_event_stream_becomes_responses_sse() {
     .expect("usage");
     assert_eq!(usage.tokens.input_tokens, Some(10));
     assert_eq!(usage.tokens.cached_input_tokens, Some(30));
-    assert_eq!(usage.tokens.cache_creation_30m_tokens, Some(5));
+    assert_eq!(
+        usage
+            .tokens
+            .cache_creation
+            .iter()
+            .find(|entry| entry.ttl_seconds.is_none())
+            .map(|entry| entry.tokens),
+        Some(5)
+    );
     assert_eq!(usage.tokens.output_tokens, Some(7));
     let events: Vec<Value> = text
         .split("\n\n")
@@ -602,7 +610,15 @@ async fn a_buffered_caller_gets_the_same_answer_as_one_responses_object() {
     .expect("usage");
     assert_eq!(usage.tokens.input_tokens, Some(10));
     assert_eq!(usage.tokens.cached_input_tokens, Some(30));
-    assert_eq!(usage.tokens.cache_creation_30m_tokens, Some(5));
+    assert_eq!(
+        usage
+            .tokens
+            .cache_creation
+            .iter()
+            .find(|entry| entry.ttl_seconds.is_none())
+            .map(|entry| entry.tokens),
+        Some(5)
+    );
     assert_eq!(usage.tokens.output_tokens, Some(7));
 }
 
@@ -927,7 +943,7 @@ async fn the_identity_center_login_registers_its_own_client_and_carries_it_to_th
     assert_eq!(method, Method::POST);
     assert_eq!(url, "https://oidc.eu-west-1.amazonaws.com/client/register");
     let body: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body["clientName"], "Kiro-CLI");
+    assert_eq!(body["clientName"], "Kiro CLI");
     assert_eq!(body["clientType"], "public");
     assert_eq!(
         body["grantTypes"],

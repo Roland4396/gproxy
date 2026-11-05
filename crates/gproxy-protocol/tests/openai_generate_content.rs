@@ -22,7 +22,7 @@ fn full_request() -> Value {
         "previous_response_id":"resp",
         "prompt":{"id":"pmpt","variables":{
             "string":"hello",
-            "text":{"type":"input_text","text":"hello","prompt_cache_breakpoint":{"mode":"explicit"}},
+            "text":{"type":"input_text","text":"hello","prompt_cache_breakpoint":{"mode":"explicit","ttl":"12h"}},
             "image":{"type":"input_image","detail":"original","file_id":null,"image_url":"https://example.com/a.png"},
             "file":{"type":"input_file","detail":"high","file_id":"file","filename":"a.pdf"}
         },"version":"2"},
@@ -95,6 +95,10 @@ fn all_request_fields_are_typed_and_alias_keeps_five_http_elements() {
         PromptVariableValue::Text(v) => {
             assert!(v.rest.is_empty());
             assert!(v.prompt_cache_breakpoint.as_ref().unwrap().rest.is_empty());
+            assert_eq!(
+                v.prompt_cache_breakpoint.as_ref().unwrap().ttl,
+                Some(gproxy_protocol::wire::openai::responses::input::PromptCacheBreakpointTtl::TwelveHours)
+            );
         }
         _ => panic!(),
     }
@@ -164,6 +168,7 @@ fn all_top_level_fields_preserve_their_documented_optionality() {
         "top_logprobs",
         "top_p",
         "truncation",
+        "user",
     ];
     let ordinary = [
         "input",
@@ -172,7 +177,6 @@ fn all_top_level_fields_preserve_their_documented_optionality() {
         "text",
         "tool_choice",
         "tools",
-        "user",
     ];
     assert_eq!(nullable.len() + ordinary.len(), 31);
     for field in nullable.iter().chain(ordinary.iter()) {
@@ -298,7 +302,7 @@ fn closed_enums_and_open_string_fields_follow_the_source() {
     ]);
     closed::<ModerationMode>(&["score", "block"]);
     closed::<PromptCachingMode>(&["implicit", "explicit"]);
-    closed::<PromptCacheTtl>(&["30m"]);
+    closed::<PromptCacheTtl>(&["30m", "12h"]);
     closed::<PromptCacheRetention>(&["in_memory", "24h"]);
     closed::<ServiceTier>(&["auto", "default", "flex", "scale", "priority", "fast"]);
     closed::<GenerateTruncation>(&["auto", "disabled"]);
@@ -390,4 +394,25 @@ fn typed_builders_emit_native_tags_and_preserve_explicit_null() {
         serde_json::to_value(request).unwrap(),
         json!({"model":"future-model","background":null,"prompt_cache_options":{"mode":"explicit","ttl":"30m"},"prompt":{"id":"p","version":null},"moderation":{"model":"moderation","policy":{"input":{"mode":"block"}}},"stream_options":{"include_obfuscation":false}})
     );
+}
+
+#[test]
+fn refreshed_reference_fields_remain_declared_in_native_requests() {
+    use gproxy_protocol::wire::DeclaredFields;
+    let wire = json!({
+        "access_programs":{"cyber":"daybreak_blue"}, "user":null,
+        "prompt_cache_options":{"ttl":"12h"},
+        "input":[
+            {"type":"function_call_output","name":"lookup","output":"done"},
+            {"type":"function_call_output","call_id":null,"output":"done"},
+            {"type":"web_search_call","id":"search","status":"incomplete", "action":{"type":"find_in_page","pattern":"x","url":null}},
+            {"type":"image_generation_call","id":"image","result":null,"status":"failed",
+                "error":{"code":"moderation_blocked","message":"blocked","param":null,"type":"invalid_request_error",
+                    "moderation_details":{"categories":["example"],"moderation_stage":"input"}}},
+            {"type":"mcp_call","id":"mcp","arguments":"{}","name":"lookup","server_label":"server","status":"failed",
+                "error":{"type":"mcp_tool_execution_error","content":[{"type":"text","text":"failed"}]}}
+        ]
+    });
+    let request: GenerateContentRequestBody = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(request.into_declared()).unwrap(), wire);
 }

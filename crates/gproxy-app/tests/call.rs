@@ -69,16 +69,18 @@ async fn usage_rows(
 #[tokio::test]
 async fn a_permitted_key_reaches_the_upstream_and_is_metered() {
     let (app, client) = one_provider().await;
-    client.script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
+    let reply = json!({"output": [{"type": "message", "content": [{"type": "output_text", "text": "hello"}]}]});
+    client.script(vec![Reply::Http(StatusCode::OK, reply.clone())]);
     let caller = support::caller_for(&app, "k-alice").await;
 
-    let outcome = app.call(&caller, request("test/m1")).await.unwrap();
+    let outcome = app.call(&caller, request("p1/m1")).await.unwrap();
     assert_eq!(outcome.execution.response().status, StatusCode::OK);
-    assert_eq!(finish(outcome).await, json!({"ok": true}));
+    assert_eq!(finish(outcome).await, reply);
 
     assert_eq!(client.urls(), ["https://p1.example/v1/responses"]);
     let rows = usage_rows(&app).await;
     assert_eq!(rows.len(), 1, "one physical call, one usage row");
+    assert_eq!(rows[0].output_tokens, Some(3));
     assert!(
         app.gproxy()
             .store()
@@ -110,6 +112,7 @@ async fn a_permission_narrows_the_plan_to_the_providers_it_names() {
     // written first because a provider-scoped rule references one.
     support::provider(&handle, "p1", &["m1"]).await;
     support::provider(&handle, "p2", &["m1"]).await;
+    support::route(&handle, "pair", &["p1", "p2"]).await;
     support::allow(&handle, "p-alice", "alice", Some("p2")).await;
     support::credential(&handle, "c-1", "p1", None, None, None).await;
     support::credential(&handle, "c-2", "p2", None, None, None).await;
@@ -117,7 +120,7 @@ async fn a_permission_narrows_the_plan_to_the_providers_it_names() {
 
     client.script(vec![Reply::Http(StatusCode::OK, json!({"from": "p2"}))]);
     let caller = support::caller_for(&app, "k-alice").await;
-    let outcome = app.call(&caller, request("test/m1")).await.unwrap();
+    let outcome = app.call(&caller, request("pair")).await.unwrap();
     assert_eq!(finish(outcome).await, json!({"from": "p2"}));
     assert_eq!(
         client.urls(),
@@ -137,7 +140,7 @@ async fn a_caller_with_no_permission_is_refused_before_anything_is_sent() {
     support::publish(&app).await;
 
     let caller = support::caller_for(&app, "k-bob").await;
-    let error = app.call(&caller, request("test/m1")).await.unwrap_err();
+    let error = app.call(&caller, request("p1/m1")).await.unwrap_err();
     assert_eq!(error.status_code(), 403);
     assert_eq!(error.code(), "forbidden");
     assert!(
@@ -162,7 +165,7 @@ async fn a_team_bound_key_cannot_spend_another_organizations_credential() {
     support::publish(&app).await;
 
     let caller = support::caller_for(&app, "k-team").await;
-    let error = app.call(&caller, request("test/m1")).await.unwrap_err();
+    let error = app.call(&caller, request("p1/m1")).await.unwrap_err();
     assert_eq!(
         error.status_code(),
         503,
@@ -176,7 +179,7 @@ async fn a_team_bound_key_cannot_spend_another_organizations_credential() {
     support::publish(&app).await;
     client.script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
     let caller = support::caller_for(&app, "k-team").await;
-    let outcome = app.call(&caller, request("test/m1")).await.unwrap();
+    let outcome = app.call(&caller, request("p1/m1")).await.unwrap();
     assert_eq!(finish(outcome).await, json!({"ok": true}));
 }
 
@@ -187,7 +190,7 @@ async fn a_spent_budget_is_refused_as_429() {
     support::publish(&app).await;
 
     let caller = support::caller_for(&app, "k-alice").await;
-    let error = app.call(&caller, request("test/m1")).await.unwrap_err();
+    let error = app.call(&caller, request("p1/m1")).await.unwrap_err();
     assert_eq!(error.status_code(), 429);
     assert_eq!(error.code(), "budget_exhausted");
     assert!(
@@ -205,10 +208,10 @@ async fn a_rate_limit_of_one_admits_then_refuses_with_a_retry_hint() {
 
     client.script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
     let caller = support::caller_for(&app, "k-alice").await;
-    let outcome = app.call(&caller, request("test/m1")).await.unwrap();
+    let outcome = app.call(&caller, request("p1/m1")).await.unwrap();
     assert_eq!(finish(outcome).await, json!({"ok": true}));
 
-    let error = app.call(&caller, request("test/m1")).await.unwrap_err();
+    let error = app.call(&caller, request("p1/m1")).await.unwrap_err();
     match error {
         AppError::RateLimited { retry_after_ms } => {
             let hint = retry_after_ms.expect("a window knows when it reopens");
@@ -241,7 +244,7 @@ async fn a_refused_request_gives_back_what_earlier_steps_charged() {
     support::publish(&app).await;
 
     let caller = support::caller_for(&app, "k-alice").await;
-    let error = app.call(&caller, request("test/m1")).await.unwrap_err();
+    let error = app.call(&caller, request("p1/m1")).await.unwrap_err();
     assert_eq!(error.status_code(), 503);
 
     // Now give it a credential: the second request is admitted, which it
@@ -250,7 +253,7 @@ async fn a_refused_request_gives_back_what_earlier_steps_charged() {
     support::publish(&app).await;
     client.script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
     let caller = support::caller_for(&app, "k-alice").await;
-    let outcome = app.call(&caller, request("test/m1")).await.unwrap();
+    let outcome = app.call(&caller, request("p1/m1")).await.unwrap();
     assert_eq!(finish(outcome).await, json!({"ok": true}));
 }
 
@@ -259,7 +262,7 @@ async fn the_gateway_session_header_never_reaches_an_upstream() {
     let (app, client) = one_provider().await;
     client.script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
 
-    let (mut parts, body) = support::parts(json!({"model": "test/m1"}));
+    let (mut parts, body) = support::parts(json!({"model": "p1/m1"}));
     parts.headers.insert(
         gproxy_sdk::GATEWAY_SESSION_HEADER,
         http::HeaderValue::from_static("ours"),
@@ -480,7 +483,7 @@ async fn an_app_starts_blind_and_publishes_what_it_reads() {
 }
 
 #[tokio::test]
-async fn app_preserves_inferred_affinity_and_managed_reset_selection() {
+async fn app_preserves_session_identity_while_reset_strategy_reselects() {
     use gproxy_sdk::dto::{CredentialPatch, ProviderPatch};
     use gproxy_store::entity::limits::credential_cycle::{self, CycleBoundary, CycleOpening};
     use sea_orm::Set;
@@ -493,9 +496,7 @@ async fn app_preserves_inferred_affinity_and_managed_reset_selection() {
         .update(
             "p1",
             ProviderPatch {
-                config: Some(
-                    json!({"credential_strategy":"earliest_reset", "session_affinity":true}),
-                ),
+                config: Some(json!({"credential_strategy":"earliest_reset"})),
                 ..Default::default()
             },
         )
@@ -546,7 +547,7 @@ async fn app_preserves_inferred_affinity_and_managed_reset_selection() {
             .collect(),
     );
     let caller = support::caller_for(&app, "k-alice").await;
-    let first = json!({"model":"test/m1", "input":[{"role":"user", "content":"hello"}]});
+    let first = json!({"model":"p1/m1", "input":[{"role":"user", "content":"hello"}]});
     let mut second = first.clone();
     second["input"]
         .as_array_mut()
@@ -560,7 +561,7 @@ async fn app_preserves_inferred_affinity_and_managed_reset_selection() {
     for (index, body) in [
         first,
         second,
-        json!({"model":"test/m1", "input":"different question"}),
+        json!({"model":"p1/m1", "input":"different question"}),
     ]
     .into_iter()
     .enumerate()
@@ -604,7 +605,7 @@ async fn app_preserves_inferred_affinity_and_managed_reset_selection() {
     assert_ne!(ids[0], ids[2]);
     assert_eq!(
         *client.authorizations.lock().unwrap(),
-        ["Bearer k-c-shared", "Bearer k-c-shared", "Bearer k-c-later"]
+        ["Bearer k-c-shared", "Bearer k-c-later", "Bearer k-c-later"]
     );
 }
 

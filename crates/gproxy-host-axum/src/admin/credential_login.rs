@@ -8,7 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use gproxy_app::{AdminScope, Caller, CredentialLogin, ScopedManage};
-use gproxy_sdk::dto::{AuthCodeComplete, AuthCodeStart, CookieExchange, DeviceStart};
+use gproxy_sdk::dto::{AuthCodeComplete, AuthCodeStart, DeviceStart};
 use gproxy_seaorm::BatchConnectionTrait;
 use serde::Deserialize;
 
@@ -28,10 +28,6 @@ pub(super) fn routes<C: BatchConnectionTrait + Send + Sync + 'static>() -> Route
         )
         .route("/credential-login/device/start", post(device_start::<C>))
         .route("/credential-login/device/poll", post(device_poll::<C>))
-        .route(
-            "/credential-login/cookie/exchange",
-            post(cookie_exchange::<C>),
-        )
 }
 
 async fn providers<C: BatchConnectionTrait + Send + Sync + 'static>(
@@ -80,6 +76,7 @@ async fn discover<C: BatchConnectionTrait + Send + Sync + 'static>(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "documentation", derive(schemars::JsonSchema))]
 struct Model {
     model: String,
 }
@@ -121,10 +118,10 @@ macro_rules! login_handler {
 login_handler!(authcode_start, AuthCodeStart, authcode_start);
 login_handler!(authcode_complete, AuthCodeComplete, authcode_complete);
 login_handler!(device_start, DeviceStart, device_start);
-login_handler!(cookie_exchange, CookieExchange, cookie_exchange);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "documentation", derive(schemars::JsonSchema))]
 struct Poll {
     login_session_id: String,
 }
@@ -145,3 +142,9 @@ async fn device_poll<C: BatchConnectionTrait + Send + Sync + 'static>(
     })
     .await
 }
+
+#[cfg(feature = "documentation")]
+#[path = "credential_login_docs.rs"]
+mod documentation;
+#[cfg(feature = "documentation")]
+pub(crate) use documentation::document;

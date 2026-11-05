@@ -123,16 +123,17 @@ macro_rules! gate {
     };
 }
 
-/// The five routes every identity family has, plus whatever else it declares.
+/// The six routes every identity family has, plus whatever else it declares.
 ///
 /// A macro rather than a generic function because the families are separate
 /// types with separate DTOs; what they share is the *shape*, and the point is
-/// that a family cannot accidentally have four of the five or a different
+/// that a family cannot accidentally have five of the six or a different
 /// method on one of them — nor reach a scope it never declared.
 macro_rules! family {
     ($router:expr, $path:literal, $family:ident, $write:ty, $patch:ty, $section:literal) => {
         $router
             .route($path, collection!($family, $write, $section))
+            .route(concat!($path, "/batch"), batch!($family, $write, $patch, $section))
             .route(
                 concat!($path, "/{id}"),
                 item!($family, $patch, $section).delete(
@@ -162,6 +163,22 @@ macro_rules! collection {
              Json(write): Json<$write>| {
                 crate::send(
                     async move { operations!(state, scope, $section, $family.create(write)) },
+                )
+            },
+        )
+    };
+}
+
+/// `POST` a list of creates, patches and deletes as one revision commit — what
+/// makes a console's "disable these five" one request instead of five.
+macro_rules! batch {
+    ($family:ident, $write:ty, $patch:ty, $section:literal) => {
+        post(
+            |State(state): State<HostState<C>>,
+             Extension(scope): Extension<AdminScope>,
+             Json(items): Json<Vec<BatchItem<$write, $patch>>>| {
+                crate::send(
+                    async move { operations!(state, scope, $section, $family.batch(items)) },
                 )
             },
         )
@@ -259,9 +276,9 @@ macro_rules! scoped {
 
 /// The six routes every configuration family has.
 ///
-/// One more than the identity families, because every sdk family also takes a
-/// `batch` — which is what makes a console's "disable these five" one revision
-/// instead of five.
+/// The same six as [`family!`], called on the handle's families. The `batch`
+/// is what makes a console's "disable these five" one revision instead of
+/// five.
 macro_rules! config_family {
     ($router:expr, $path:literal, [$($family:tt)+], $write:ty, $patch:ty, $section:literal) => {
         $router
@@ -398,8 +415,33 @@ macro_rules! scoped_family {
 mod config;
 mod context;
 mod credential_login;
+#[cfg(not(target_arch = "wasm32"))]
+mod fonts;
 mod identity;
 mod observation;
+
+#[cfg(feature = "documentation")]
+pub(crate) fn document(api: &mut crate::documentation::Api) {
+    identity::document(api);
+    config::document(api);
+    observation::document(api);
+    credential_login::document(api);
+    context::document(api);
+    #[cfg(not(target_arch = "wasm32"))]
+    for method in ["get", "post", "delete"] {
+        let response = api.schemas.output::<crate::console::fonts::FontStatus>();
+        let operation = api.route(
+            method,
+            "/admin/api/fonts",
+            "configuration.settings",
+            None,
+            vec![],
+            Some(response),
+        );
+        operation["x-runtime-condition"] =
+            serde_json::json!("Native host with the console enabled");
+    }
+}
 
 /// `/admin/api`, to be nested under that prefix.
 ///
@@ -423,6 +465,10 @@ where
         .merge(config::routes())
         .merge(observation::routes())
         .merge(credential_login::routes());
+    #[cfg(not(target_arch = "wasm32"))]
+    if state.console().is_enabled() {
+        families = families.merge(fonts::routes::<C>());
+    }
     if state.updates().is_some() {
         families = families.merge(crate::update::routes::<C>());
     }

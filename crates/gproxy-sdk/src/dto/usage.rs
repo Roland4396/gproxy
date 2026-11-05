@@ -9,20 +9,39 @@ use serde_json::Value;
 
 use gproxy_store::entity::usage::usage_record;
 
+/// Reported cache writes for one retention duration. None means unknown TTL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CacheCreationDto {
+    pub tokens: u64,
+    pub ttl_seconds: Option<u64>,
+}
+
+impl From<gproxy_protocol::usage::CacheCreation> for CacheCreationDto {
+    fn from(value: gproxy_protocol::usage::CacheCreation) -> Self {
+        Self {
+            tokens: value.tokens,
+            ttl_seconds: value.ttl_seconds,
+        }
+    }
+}
+
 /// Token counts exactly as the upstream reported them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageTokensDto {
     /// Ordinary input, excluding cache reads and cache writes.
     pub input_tokens: Option<u64>,
     /// Total output, reasoning included.
     pub output_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
-    pub cache_creation_5m_tokens: Option<u64>,
-    pub cache_creation_30m_tokens: Option<u64>,
-    pub cache_creation_1h_tokens: Option<u64>,
+    pub cache_creation: Vec<CacheCreationDto>,
     /// A subset of `output_tokens`, never additive with it.
     pub reasoning_tokens: Option<u64>,
 }
@@ -33,9 +52,33 @@ impl UsageTokensDto {
             input_tokens: row.input_tokens(),
             output_tokens: row.output_tokens(),
             cached_input_tokens: row.cached_input_tokens(),
-            cache_creation_5m_tokens: row.cache_creation_5m_tokens(),
-            cache_creation_30m_tokens: row.cache_creation_30m_tokens(),
-            cache_creation_1h_tokens: row.cache_creation_1h_tokens(),
+            cache_creation: match &row.cache_creation {
+                Some(value) => value
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| {
+                        Some(CacheCreationDto {
+                            tokens: entry.get("tokens")?.as_u64()?,
+                            ttl_seconds: entry.get("ttl_seconds").and_then(Value::as_u64),
+                        })
+                    })
+                    .collect(),
+                None => [
+                    (row.cache_creation_5m_tokens(), Some(300)),
+                    // The old OpenAI bucket did not report a retention duration.
+                    (row.cache_creation_30m_tokens(), None),
+                    (row.cache_creation_1h_tokens(), Some(3600)),
+                ]
+                .into_iter()
+                .filter_map(|(tokens, ttl_seconds)| {
+                    Some(CacheCreationDto {
+                        tokens: tokens?,
+                        ttl_seconds,
+                    })
+                })
+                .collect(),
+            },
             reasoning_tokens: row.reasoning_tokens(),
         }
     }
@@ -46,13 +89,16 @@ impl UsageTokensDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageRecordDto {
     /// Physical upstream call ID. A corresponding capture log need not exist.
     pub request_id: String,
     pub user_id: Option<String>,
     pub api_key_id: Option<String>,
-    /// The upstream model that produced this usage.
+    /// The upstream model the call was routed to.
     pub model: String,
+    /// The model the upstream response named, which may differ from `model`.
+    pub response_model: Option<String>,
     pub operation: String,
     /// The settlement state core recorded: `settled`, `failed`, … .
     pub state: Option<String>,
@@ -89,6 +135,7 @@ impl From<gproxy_core::usage_scan::UsageRecord> for UsageRecordDto {
             user_id: row.user_id,
             api_key_id: row.api_key_id,
             model: row.model,
+            response_model: row.response_model,
             operation: row.operation,
             state: row.state,
             completeness: row.completeness,
@@ -108,6 +155,7 @@ impl From<gproxy_core::usage_scan::UsageRecord> for UsageRecordDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageExchangeDto {
     pub capture_id: Option<String>,
     pub completeness: Option<String>,
@@ -121,6 +169,8 @@ pub struct UsageExchangeDto {
     pub credential_id: Option<String>,
     /// The upstream model name, which need not be the requested one.
     pub model: Option<String>,
+    /// The model the upstream response named, which may differ from `model`.
+    pub response_model: Option<String>,
     pub tokens: UsageTokensDto,
     /// Reported media/tool quantities, as exact decimal strings. Missing is unknown.
     pub quantities: std::collections::BTreeMap<String, String>,
@@ -140,6 +190,7 @@ impl UsageExchangeDto {
             provider_id: row.provider_id.clone(),
             credential_id: row.credential_id.clone(),
             model: (!row.model.is_empty()).then(|| row.model.clone()),
+            response_model: row.response_model.clone(),
             tokens: UsageTokensDto::from_row(row),
             quantities: quantities(row),
             cost: row.cost.map(|cost| cost.to_string()),
@@ -153,6 +204,7 @@ impl UsageExchangeDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageSummaryDto {
     /// Number of physical upstream calls, independent of downstream association count.
     pub requests: u64,
@@ -162,11 +214,9 @@ pub struct UsageSummaryDto {
     /// Only records with reported output tokens, TTFT and positive generation time contribute.
     pub average_output_tps: Option<f64>,
     pub cached_input_tokens: u64,
-    /// Total cache writes across all three retention periods.
+    /// Total reported cache writes across all retention periods.
     pub cache_creation_tokens: u64,
-    pub cache_creation_5m_tokens: u64,
-    pub cache_creation_30m_tokens: u64,
-    pub cache_creation_1h_tokens: u64,
+    pub cache_creation: Vec<CacheCreationDto>,
     /// Part of `output_tokens`, listed rather than added.
     pub reasoning_tokens: u64,
     /// Totals of reported media/tool quantities; keys are billable metric names.
@@ -186,6 +236,7 @@ pub struct UsageSummaryDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageGroupDto {
     /// The grouping column's value. None is "the records carried none" — an
     /// anonymous request has no user, a failed attempt no provider.
@@ -200,6 +251,7 @@ pub struct UsageGroupDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageTrendPointDto {
     pub start_ms: i64,
     /// Exclusive, always `start_ms + bucketMs`: the last bucket keeps the
@@ -214,6 +266,7 @@ pub struct UsageTrendPointDto {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageRecordQuery {
     pub from_ms: Option<i64>,
     pub to_ms: Option<i64>,
@@ -237,6 +290,7 @@ pub struct UsageRecordQuery {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageRecordPage {
     pub items: Vec<UsageRecordDto>,
     pub total: u64,
@@ -252,6 +306,7 @@ pub struct UsageRecordPage {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageQuery {
     pub from_ms: Option<i64>,
     pub to_ms: Option<i64>,
@@ -274,6 +329,7 @@ pub struct UsageQuery {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum UsageGroupBy {
     User,
     ApiKey,
@@ -291,6 +347,7 @@ pub enum UsageGroupBy {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageGroupQuery {
     pub filter: UsageQuery,
     pub group_by: UsageGroupBy,
@@ -300,6 +357,7 @@ pub struct UsageGroupQuery {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UsageTrendQuery {
     /// `to_ms` is required: buckets are counted up to it. Buckets are aligned
     /// to `from_ms`; without it they start at the first matching record,

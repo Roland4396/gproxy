@@ -50,10 +50,12 @@ function cargoHome() {
 }
 
 function archives() {
+  const target = env.CARGO_TARGET_DIR || path.join(env.GITHUB_WORKSPACE, 'target');
   return [
-    { name: 'target', root: env.GITHUB_WORKSPACE, entries: ['target'] },
+    { name: 'target', root: path.dirname(target), entries: [path.basename(target)] },
     // Do not restore cargo/bin: container images and rustup own the toolchain.
     { name: 'cargo', root: cargoHome(), entries: ['registry', 'git'] },
+    ...(env.GRADLE_USER_HOME ? [{ name: 'gradle', root: env.GRADLE_USER_HOME, entries: ['caches', 'wrapper'] }] : []),
   ];
 }
 
@@ -148,11 +150,13 @@ async function cache() {
         const filename = `${archive.name}.tar.zst`;
         const output = path.join(directory, filename);
         const started = Date.now();
-        // Incremental state is disposable and is not needed for release reuse.
+        // Keep compiled artifacts, not previous release installers.
+        const excludes = ['--exclude=incremental'];
+        if (archive.name === 'target') excludes.push('--exclude=*/release/bundle');
         // Stream directly into parallel zstd: no second, uncompressed copy of
         // the target directory and no single-threaded gzip on the critical path.
         await pipe(
-          { command: tar, args: ['--format=pax', '-cf', '-', '--exclude=incremental', ...entries], cwd: archive.root },
+          { command: tar, args: ['--format=pax', '-cf', '-', ...excludes, ...entries], cwd: archive.root },
           { command: 'zstd', args: ['-T0', '-3', '-q', '-o', output] },
         );
         files.push(`${filename}:application/vnd.gproxy.cargo-cache.v2.tar+zstd`);

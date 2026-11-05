@@ -15,8 +15,9 @@
 //! in the same signature.
 
 use gproxy_seaorm::{BatchConnectionTrait, BatchResult, BatchStatement, SelectProjection};
-use gproxy_store::{Repository, StoreError};
-use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, Select};
+use gproxy_store::{Repository, StoreError, entity::identity::api_key};
+use sea_orm::sea_query::Query;
+use sea_orm::{ColumnTrait, Condition, EntityTrait, FromQueryResult, QueryFilter, Select};
 use serde_json::Value;
 
 use super::{Scope, Writer};
@@ -61,6 +62,14 @@ where
         current: &ModelOf<Self, C>,
         patch: Self::Patch,
     ) -> Result<ActiveOf<Self, C>>;
+    /// The statement that writes a row [`Shape::build`] produced. An insert,
+    /// except for a family whose key a new registration can take over — an
+    /// OAuth client, whose retired row is reused under the same `client_id`.
+    async fn insert(&self, model: ActiveOf<Self, C>, _id: &str) -> Result<BatchStatement> {
+        Ok(BatchStatement::Execute(
+            self.repository().insert_statement(model)?,
+        ))
+    }
     /// Statements that must run before the row itself is deleted.
     ///
     /// This exists for exactly one rule, and it is the reason it is on the
@@ -117,15 +126,9 @@ where
     S: Shape<C>,
 {
     let (model, id) = shape.build(write).await?;
-    let statement = shape.repository().insert_statement(model)?;
+    let statement = shape.insert(model, &id).await?;
     let scopes = shape.scopes();
-    commit_one::<C, S>(
-        shape,
-        vec![BatchStatement::Execute(statement)],
-        &id,
-        &scopes,
-    )
-    .await
+    commit_one::<C, S>(shape, vec![statement], &id, &scopes).await
 }
 
 pub(crate) async fn update<C, S>(shape: &S, id: &str, patch: S::Patch) -> Result<S::Dto>
@@ -184,7 +187,7 @@ where
         match item {
             BatchItem::Create(write) => {
                 let (model, id) = shape.build(write).await?;
-                statements.push(BatchStatement::Execute(repository.insert_statement(model)?));
+                statements.push(shape.insert(model, &id).await?);
                 reads.push(Some(id));
             }
             BatchItem::Update(step) => {
@@ -337,6 +340,23 @@ pub(crate) fn decimal(value: &str, field: &'static str) -> Result<gproxy_store::
         .trim()
         .parse()
         .map_err(|error| AppError::invalid(format!("{field} is not a valid decimal: {error}")))
+}
+
+/// The `ownerUserId` filter: rows whose subject is the user, or one of the
+/// user's API keys.
+pub(crate) fn owned_by(
+    user: impl ColumnTrait,
+    key: impl ColumnTrait,
+    user_id: String,
+) -> Condition {
+    let keys = Query::select()
+        .column(api_key::Column::Id)
+        .from(api_key::Entity)
+        .and_where(api_key::Column::UserId.eq(user_id.clone()))
+        .to_owned();
+    Condition::any()
+        .add(user.eq(user_id))
+        .add(key.in_subquery(keys))
 }
 
 /// A model glob, as `snapshot::glob` and core's `rewrite::compile` read one.

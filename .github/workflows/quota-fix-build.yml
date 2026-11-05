@@ -1,8 +1,7 @@
 name: Upgrade v4 · Linux image
 
-on:
+'on':
   workflow_dispatch: null
-
 permissions:
   contents: read
 
@@ -20,7 +19,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_PROFILE_RELEASE_LTO: thin
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8
-      GPROXY_BUILD_VERSION: 4.1.1+local.upgrade1
+      GPROXY_BUILD_VERSION: 4.1.14+local.sync1
       GPROXY_BUILD_CHANNEL: dev
       GPROXY_BUILD_HASH: ${{ github.sha }}
       GPROXY_INSTALLATION_KIND: container
@@ -62,6 +61,7 @@ jobs:
           pnpm lint
           pnpm test
           pnpm build
+          pnpm i18n:check
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.99.0
@@ -81,7 +81,7 @@ jobs:
       - name: Backend and channel regressions (synthetic credentials only)
         run: |
           cargo test --locked \
-            -p gproxy-protocol -p gproxy-channel -p gproxy-core -p gproxy-store \
+            -p gproxy-protocol -p gproxy-client-sdk -p gproxy-channel -p gproxy-core -p gproxy-store \
             -p gproxy-sdk -p gproxy-app -p gproxy-host-axum -p gproxy --lib --tests
       - name: Compile the v4 production CLI/server
         run: cargo build --locked --release --package gproxy --bin gproxy

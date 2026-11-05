@@ -85,7 +85,8 @@ async fn usage_rows(gproxy: &Handle) -> Vec<usage_record::Model> {
 #[tokio::test]
 async fn a_scripted_answer_comes_back_and_is_metered() {
     let (gproxy, client, _) = pair().await;
-    client.script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
+    let reply = json!({"output": [{"type": "message", "content": [{"type": "output_text", "text": "hello"}]}]});
+    client.script(vec![Reply::Http(StatusCode::OK, reply.clone())]);
 
     let execution = gproxy
         .call(generate(), request(json!({"model": "pair"})))
@@ -99,11 +100,12 @@ async fn a_scripted_answer_comes_back_and_is_metered() {
         .await
         .unwrap();
     assert_eq!(execution.response().status, StatusCode::OK);
-    assert_eq!(finish(execution).await, r#"{"ok":true}"#);
+    assert_eq!(finish(execution).await, reply.to_string());
 
     assert_eq!(client.urls(), ["https://p1.example/v1/responses"]);
     let rows = usage_rows(&gproxy).await;
     assert_eq!(rows.len(), 1, "one physical call, one usage row");
+    assert_eq!(rows[0].output_tokens, Some(3));
     assert!(
         gproxy
             .store()
@@ -345,13 +347,16 @@ async fn the_narrowing_setters_reach_the_plan() {
 #[tokio::test]
 async fn an_explicit_model_overrides_the_body() {
     let (gproxy, client, _) = pair().await;
-    client.script(vec![Reply::Http(StatusCode::OK, json!({"ok": true}))]);
+    client.script(vec![Reply::Http(
+        StatusCode::OK,
+        json!({"output": [{"type": "message", "content": [{"type": "output_text", "text": "hello"}]}]}),
+    )]);
 
     // The body names a route that does not exist; the setter names one that does.
     let execution = gproxy
         .call(generate(), request(json!({"model": "nonsense"})))
         .scope("user:u1")
-        .model("test/m1")
+        .model("p1/m1")
         .request_id("req-9")
         .send()
         .await
@@ -507,127 +512,132 @@ async fn buffered_stream_keepalive_preserves_provider_failover_and_settlement() 
 }
 
 #[tokio::test]
-async fn managed_reset_strategy_and_affinity_reach_core_for_http_and_websocket() {
+async fn managed_credential_strategies_reach_core_for_http_and_websocket() {
     use gproxy_sdk::dto::{CredentialPatch, ProviderPatch};
     use gproxy_store::entity::limits::credential_cycle::{self, CycleBoundary, CycleOpening};
     use sea_orm::Set;
-    let (gproxy, client, observer) = seed::handle().await;
-    seed::provider(&gproxy, "p", "alt", &["m1"]).await;
-    for id in ["a", "b"] {
-        seed::credential(&gproxy, id, "p").await;
-    }
-    seed::publish(&gproxy).await;
-    let config = json!({"credential_strategy":"earliest_reset", "session_affinity":true});
-    let provider = gproxy
-        .manage()
-        .providers()
-        .update(
-            "p",
-            ProviderPatch {
-                config: Some(config.clone()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(provider.config, config);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    for (id, delay) in [("a", 3_600_000), ("b", 600_000)] {
-        gproxy
+    for (strategy, authorization) in [
+        ("earliest_reset", "Bearer k-b"),
+        ("sticky", "Bearer k-a"),
+        ("round_robin_affinity", "Bearer k-a"),
+    ] {
+        let (gproxy, client, observer) = seed::handle().await;
+        seed::provider(&gproxy, "p", "alt", &["m1"]).await;
+        for id in ["a", "b"] {
+            seed::credential(&gproxy, id, "p").await;
+        }
+        seed::publish(&gproxy).await;
+        let config = json!({"credential_strategy":strategy});
+        let provider = gproxy
             .manage()
-            .credentials()
+            .providers()
             .update(
-                id,
-                CredentialPatch {
-                    metadata: Some(json!({"observed_quota":true})),
+                "p",
+                ProviderPatch {
+                    config: Some(config.clone()),
                     ..Default::default()
                 },
             )
             .await
             .unwrap();
-        gproxy
-            .store()
-            .credential_cycles()
-            .create_many(vec![credential_cycle::ActiveModel {
-                id: Set(format!("cycle-{id}")),
-                credential_id: Set(id.into()),
-                open_key: Set(Some(credential_cycle::open_key(id, "5h"))),
-                window_id: Set("5h".into()),
-                dimension_id: Set(Some("5h".into())),
-                scope: Set(json!("all")),
-                starts_at_ms: Set(now),
-                ends_at_ms: Set(Some(now + delay)),
-                boundary: Set(CycleBoundary::Observed),
-                opened_by: Set(CycleOpening::FirstUse),
-                cost_usd: Set(gproxy_store::FixedDecimal::ZERO),
-                sample_at_ms: Set(Some(now)),
-                ..Default::default()
-            }])
-            .await
-            .unwrap();
-    }
-    // Explicitly reload as a host using manual sync would do.
-    seed::publish(&gproxy).await;
-    assert!(gproxy.core().snapshot().providers["p"].session_affinity);
-    client.script(vec![Reply::Http(StatusCode::OK, json!({"ok":true}))]);
-    finish(
-        gproxy
-            .call(
-                generate(),
-                with_headers(
-                    json!({"model":"alt/m1", "input":"hello"}),
-                    &[("x-opencode-session", "s")],
-                ),
+        assert_eq!(provider.config, config);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        for (id, delay) in [("a", 3_600_000), ("b", 600_000)] {
+            gproxy
+                .manage()
+                .credentials()
+                .update(
+                    id,
+                    CredentialPatch {
+                        metadata: Some(json!({"observed_quota":true})),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            gproxy
+                .store()
+                .credential_cycles()
+                .create_many(vec![credential_cycle::ActiveModel {
+                    id: Set(format!("cycle-{id}")),
+                    credential_id: Set(id.into()),
+                    open_key: Set(Some(credential_cycle::open_key(id, "5h"))),
+                    window_id: Set("5h".into()),
+                    dimension_id: Set(Some("5h".into())),
+                    scope: Set(json!("all")),
+                    starts_at_ms: Set(now),
+                    ends_at_ms: Set(Some(now + delay)),
+                    boundary: Set(CycleBoundary::Observed),
+                    opened_by: Set(CycleOpening::FirstUse),
+                    cost_usd: Set(gproxy_store::FixedDecimal::ZERO),
+                    sample_at_ms: Set(Some(now)),
+                    ..Default::default()
+                }])
+                .await
+                .unwrap();
+        }
+        // Explicitly reload as a host using manual sync would do.
+        seed::publish(&gproxy).await;
+        client.script(vec![Reply::Http(StatusCode::OK, json!({"ok":true}))]);
+        finish(
+            gproxy
+                .call(
+                    generate(),
+                    with_headers(
+                        json!({"model":"p/m1", "input":"hello"}),
+                        &[("x-opencode-session", "s")],
+                    ),
+                )
+                .scope("user:u1")
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(client.authorizations.lock().unwrap()[0], authorization);
+        assert_eq!(observer.seen()[0].1.source, SessionSource::OpenCode);
+
+        client.script_ws(vec![WsReply::Connected]);
+        let execution = gproxy
+            .connect(
+                OperationKey {
+                    operation: Operation::StreamGenerateContent,
+                    dialect: Dialect::OpenAiResponsesWebSocket,
+                },
+                WireRequest {
+                    method: Method::GET,
+                    path: "/v1/responses".into(),
+                    query: None,
+                    headers: HeaderMap::new(),
+                    body: (),
+                },
             )
             .scope("user:u1")
+            .model("p/m1")
+            .session(gproxy_core::SessionIdentity {
+                id: "s".into(),
+                source: SessionSource::OpenCode,
+                field: None,
+                agent_session_id: None,
+            })
             .send()
             .await
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(client.authorizations.lock().unwrap()[0], "Bearer k-b");
-    assert_eq!(observer.seen()[0].1.source, SessionSource::OpenCode);
-
-    client.script_ws(vec![WsReply::Connected]);
-    let execution = gproxy
-        .connect(
-            OperationKey {
-                operation: Operation::StreamGenerateContent,
-                dialect: Dialect::OpenAiResponsesWebSocket,
-            },
-            WireRequest {
-                method: Method::GET,
-                path: "/v1/responses".into(),
-                query: None,
-                headers: HeaderMap::new(),
-                body: (),
-            },
-        )
-        .scope("user:u1")
-        .model("alt/m1")
-        .session(gproxy_core::SessionIdentity {
-            id: "s".into(),
-            source: SessionSource::OpenCode,
-            field: None,
-            agent_session_id: None,
-        })
-        .send()
-        .await
-        .unwrap();
-    assert!(matches!(
-        execution.response(),
-        gproxy_protocol::capability::UpstreamConnection::Connected { .. }
-    ));
-    assert_eq!(client.authorizations.lock().unwrap()[1], "Bearer k-b");
-    assert!(
-        observer
-            .seen()
-            .iter()
-            .all(|(_, s)| s.id == "s" && s.source == SessionSource::OpenCode)
-    );
+            .unwrap();
+        assert!(matches!(
+            execution.response(),
+            gproxy_protocol::capability::UpstreamConnection::Connected { .. }
+        ));
+        assert_eq!(client.authorizations.lock().unwrap()[1], authorization);
+        assert!(
+            observer
+                .seen()
+                .iter()
+                .all(|(_, s)| s.id == "s" && s.source == SessionSource::OpenCode)
+        );
+    }
 }
 
 #[tokio::test]

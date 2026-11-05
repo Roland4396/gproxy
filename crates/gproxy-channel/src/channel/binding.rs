@@ -84,9 +84,11 @@ impl<'a> ChannelBinding<'a> {
             Operation::CountTokens => self.channel.count_tokens(context).await,
             Operation::GenerateContent => self.channel.generate_content(context).await,
             Operation::StreamGenerateContent => self.channel.stream_generate_content(context).await,
-            Operation::GuardianReview => self.channel.guardian_review(context).await,
+            Operation::RetrieveInteraction => self.channel.retrieve_interaction(context).await,
+            Operation::CancelInteraction => self.channel.cancel_interaction(context).await,
+            Operation::DeleteInteraction => self.channel.delete_interaction(context).await,
             Operation::CreateModeration => self.channel.create_moderation(context).await,
-            Operation::GuardianClassify => self.channel.guardian_classify(context).await,
+            Operation::CreateDecision => self.channel.create_decision(context).await,
             Operation::CompactContent => self.channel.compact_content(context).await,
             Operation::SummarizeMemory => self.channel.summarize_memory(context).await,
             Operation::CreateConversation => self.channel.create_conversation(context).await,
@@ -109,8 +111,17 @@ impl<'a> ChannelBinding<'a> {
             Operation::ListVideos => self.channel.list_videos(context).await,
             Operation::DeleteVideo => self.channel.delete_video(context).await,
             Operation::DownloadVideoContent => self.channel.download_video_content(context).await,
+            Operation::CreateVoice => self.channel.create_voice(context).await,
+            Operation::CreateRealtimeClientSecret => {
+                self.channel.create_realtime_client_secret(context).await
+            }
+            Operation::HangupRealtimeCall => self.channel.hangup_realtime_call(context).await,
+            Operation::CreateLiveSession => self.channel.create_live_session(context).await,
+            Operation::HangupLiveSession => self.channel.hangup_live_session(context).await,
             Operation::CreateRealtimeCall => self.channel.create_realtime_call(context).await,
-            Operation::ConnectRealtime => Err(ChannelError::WrongTransport(operation)),
+            Operation::ConnectRealtime | Operation::ConnectLive => {
+                Err(ChannelError::WrongTransport(operation))
+            }
         }
     }
 
@@ -133,6 +144,7 @@ impl<'a> ChannelBinding<'a> {
         };
         match operation.operation {
             Operation::ConnectRealtime => self.channel.connect_realtime(context).await,
+            Operation::ConnectLive => self.channel.connect_live(context).await,
             Operation::GenerateContent => self.channel.generate_content_websocket(context).await,
             Operation::StreamGenerateContent => {
                 self.channel

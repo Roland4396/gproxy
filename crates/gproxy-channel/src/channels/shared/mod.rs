@@ -36,6 +36,8 @@ pub(crate) mod code_assist;
 /// `kimi`, `opencode`, `openrouter` and `xai`, among others.
 #[cfg(any(
     feature = "cloudflare_ai_gateway",
+    feature = "commandcode",
+    feature = "trae",
     feature = "nvidia",
     feature = "cline",
     feature = "copilotcli",
@@ -44,8 +46,10 @@ pub(crate) mod code_assist;
     feature = "glm",
     feature = "minimax",
     feature = "grokbuild",
+    feature = "volcengine",
     feature = "kimi",
     feature = "opencode",
+    feature = "orcaterm",
     feature = "openrouter",
     feature = "vercel",
     feature = "xai"
@@ -56,6 +60,16 @@ pub(crate) mod compatible;
 /// own service surface. Shared by `claudecode` and `codex`.
 #[cfg(any(feature = "codex", feature = "claudecode"))]
 pub(crate) mod services_common;
+/// A timer that runs on native hosts and on Cloudflare Workers, for the
+/// channels that wait between upstream retries.
+#[cfg(any(
+    feature = "antigravity",
+    feature = "claudecode",
+    feature = "geminicli",
+    feature = "grokbuild",
+    feature = "kimi"
+))]
+pub(crate) mod timer;
 
 #[cfg(any(feature = "claudecode", feature = "claudeweb"))]
 pub(crate) fn browser_connection() -> gproxy_client::ConnectionConfig {
@@ -98,3 +112,21 @@ pub(crate) mod claude_fallback;
 
 #[cfg(any(feature = "claudeapi", feature = "vercel"))]
 pub(crate) mod claude_hygiene;
+/// Scaling for Anthropic's many-image dimension limit.
+#[cfg(any(
+    feature = "aws_bedrock",
+    feature = "azure",
+    feature = "claudeapi",
+    feature = "claudecode",
+    feature = "cloudflare_ai_gateway",
+    feature = "commandcode",
+    feature = "opencode",
+    feature = "openrouter",
+    feature = "vercel",
+    feature = "vertex"
+))]
+pub(crate) mod claude_images;
+
+/// Vertex's full resource names and publisher-qualified ids.
+#[cfg(any(feature = "vertex", feature = "vertexexpress"))]
+pub(crate) mod google_model;

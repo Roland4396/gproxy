@@ -626,6 +626,19 @@ impl Updater {
         manifest: &manifest::Manifest,
         restart_after: bool,
     ) -> Outcome<AppliedUpdate> {
+        // A release artifact is this repository's build. Swapping it in under
+        // a binary that registered channels of its own would drop them, and
+        // every provider on them would stop resolving after the restart.
+        if crate::EXTRA_CHANNELS
+            .get()
+            .is_some_and(|channels| !channels.is_empty())
+        {
+            return Err(UpdateError::Configuration(
+                "this binary carries channels the published release does not; rebuild it \
+                 against the new version instead"
+                    .to_owned(),
+            ));
+        }
         // Before anything is downloaded. An instance whose database this
         // release cannot open must not spend eighteen megabytes finding out.
         version::compatible(manifest.min_compatible_data_version, DATA_VERSION)?;
@@ -757,10 +770,14 @@ impl UpdateService for Updater {
             let channel = self
                 .channel(None)
                 .map_or(BUILD_CHANNEL, |channel| channel.as_str());
+            // The host this instance updates from is the one most likely to
+            // be reachable from its network, so the feed is tried there first.
+            let source = self.source(None).unwrap_or_default();
             Ok(announce::applicable(
                 &self.announcements,
                 &self.client,
                 self.signing_key.as_deref(),
+                source,
                 BUILD_VERSION,
                 channel,
             )

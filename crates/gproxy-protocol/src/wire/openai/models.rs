@@ -3,14 +3,15 @@ use serde::{Deserialize, Serialize};
 use crate::Rest;
 
 /// Query/path request shapes for `GET /models` and `GET /models/{model}`.
-/// Source: `upstream_docs/openai/docs/List models.md` and `Retrieve model.md`.
-/// Extended catalog fields follow `samples/codex/codex-rs/protocol/src/openai_models.rs`.
+// Source: `upstream_docs/openai/docs/List models.md` and `Retrieve model.md`.
+// Extended catalog fields follow `samples/codex/codex-rs/protocol/src/openai_models.rs`.
 pub type ListModelsRequest = crate::WireRequest<()>;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ListObject {
     #[default]
     List,
@@ -20,6 +21,7 @@ pub enum ListObject {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ModelObject {
     Model,
 }
@@ -32,6 +34,7 @@ pub type GetModelRequest = crate::WireRequest<()>;
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ListModelsResponseBody {
     #[serde(default)]
     pub data: Vec<Model>,
@@ -52,6 +55,7 @@ pub type GetModelResponse = crate::WireResponse<Model>;
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Model {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
@@ -59,14 +63,24 @@ pub struct Model {
     pub slug: Option<String>,
     /// Some compatible catalogs do not report a creation timestamp.
     #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<i64>,
     #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object: Option<ModelObject>,
     #[wire(required)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-gproxy-required" = true)))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owned_by: Option<String>,
+    /// Announced shutdown date (`YYYY-MM-DD`); explicit `null` when none is announced.
+    #[serde(
+        default,
+        deserialize_with = "super::chat::content::present_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shutdown_date: Option<Option<String>>,
 
     // GPROXY model extensions, matching the v3 OpenAI model contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,6 +223,7 @@ pub struct Model {
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelReasoningLevel {
     pub effort: ModelReasoningEffort,
     pub description: String,
@@ -216,6 +231,7 @@ pub struct ModelReasoningLevel {
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelServiceTier {
     pub id: String,
     pub name: String,
@@ -258,7 +274,10 @@ where
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps: Option<AppsMessages>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_filter_guidance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -299,6 +318,7 @@ pub struct ModelMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfirmationPolicies {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_use: Option<String>,
@@ -318,7 +338,19 @@ pub struct ConfirmationPolicies {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<HistoryToolMessages>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<NotesToolMessages>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<ContextManagementToolMessages>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incremental_tools: Option<IncrementalToolMessages>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub functions_namespace_functions_description_prefixes:
+        Option<std::collections::BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indirect_description_prefixes: Option<IndirectDescriptionPrefixes>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -343,6 +375,7 @@ pub struct ToolMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IndirectDescriptionPrefixes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespaces: Option<std::collections::BTreeMap<String, String>>,
@@ -362,6 +395,7 @@ pub struct IndirectDescriptionPrefixes {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -381,6 +415,7 @@ pub struct ToolMessage {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MultiAgentToolMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn_agent: Option<ToolMessage>,
@@ -426,6 +461,7 @@ pub struct MultiAgentToolMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct McpResourceToolMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_mcp_resources: Option<ToolMessage>,
@@ -447,6 +483,7 @@ pub struct McpResourceToolMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CodeModeToolMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exec: Option<ToolMessage>,
@@ -470,6 +507,7 @@ pub struct CodeModeToolMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelTokenBudgetConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -494,7 +532,18 @@ pub struct ModelTokenBudgetConfig {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ApprovalMessages {
+    #[serde(
+        default,
+        alias = "request_permissions_tool",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_permissions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_review_suffix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granular: Option<GranularApprovalMessages>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_request: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -517,6 +566,7 @@ pub struct ApprovalMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CollaborationModeMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
@@ -536,6 +586,7 @@ pub struct CollaborationModeMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AutoReviewMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<String>,
@@ -561,7 +612,20 @@ pub struct AutoReviewMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PermissionMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_prefixes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_command_prefix_saved: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_roots: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted_paths: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denied_reads: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub danger_full_access: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -582,6 +646,7 @@ pub struct PermissionMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MultiAgentMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<MultiAgentRoleMessages>,
@@ -601,6 +666,7 @@ pub struct MultiAgentMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MultiAgentRoleMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
@@ -620,6 +686,7 @@ pub struct MultiAgentRoleMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MultiAgentModeMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explicit: Option<String>,
@@ -641,6 +708,7 @@ pub struct MultiAgentModeMessages {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelInstructionsVariables {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personality_default: Option<String>,
@@ -662,6 +730,7 @@ pub struct ModelInstructionsVariables {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelInfoUpgrade {
     pub model: String,
     pub migration_markdown: String,
@@ -681,6 +750,7 @@ pub struct ModelInfoUpgrade {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelAvailabilityNux {
     pub message: String,
     #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
@@ -697,6 +767,7 @@ pub struct ModelAvailabilityNux {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GuardianModelPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub computer_use: Option<GuardianReviewMode>,
@@ -732,6 +803,7 @@ pub struct GuardianModelPolicy {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GuardianV2ModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub async_classifier_mode: Option<AsyncClassifierMode>,
@@ -769,6 +841,7 @@ pub struct GuardianV2ModelConfig {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GuardianV2TranscriptModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<String>>,
@@ -798,6 +871,7 @@ pub struct GuardianV2TranscriptModelConfig {
     Deserialize,
     gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelAccessPrograms {
     #[serde(deserialize_with = "known_cyber_programs")]
     pub cyber: Vec<CyberAccessProgram>,
@@ -809,6 +883,7 @@ pub struct ModelAccessPrograms {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ModelVisibility {
     List,
     Hide,
@@ -819,6 +894,7 @@ pub enum ModelVisibility {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConfigShellToolType {
     #[serde(alias = "default", alias = "local", alias = "shell_command")]
     UnifiedExec,
@@ -829,6 +905,7 @@ pub enum ConfigShellToolType {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ApplyPatchToolType {
     Freeform,
 }
@@ -837,6 +914,7 @@ pub enum ApplyPatchToolType {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WebSearchToolType {
     Text,
     TextAndImage,
@@ -846,6 +924,7 @@ pub enum WebSearchToolType {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum TruncationMode {
     Bytes,
     Tokens,
@@ -854,6 +933,7 @@ pub enum TruncationMode {
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TruncationPolicyConfig {
     pub mode: TruncationMode,
     pub limit: i64,
@@ -865,6 +945,7 @@ pub struct TruncationPolicyConfig {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolMode {
     Direct,
     CodeMode,
@@ -875,6 +956,7 @@ pub enum ToolMode {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum MultiAgentVersion {
     Disabled,
     V1,
@@ -885,6 +967,7 @@ pub enum MultiAgentVersion {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CyberAccessProgram {
     Standard,
     DaybreakBlue,
@@ -895,6 +978,7 @@ pub enum CyberAccessProgram {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum GuardianReviewMode {
     Disabled,
     Synchronous,
@@ -907,6 +991,7 @@ pub enum GuardianReviewMode {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum GuardianUnscoredAction {
     Ignore,
     AgeScore,
@@ -919,6 +1004,7 @@ pub enum GuardianUnscoredAction {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum AsyncClassifierMode {
     Snapshot,
     Conversation,
@@ -928,6 +1014,7 @@ pub enum AsyncClassifierMode {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ModelReasoningSummary {
     Auto,
     Concise,
@@ -958,6 +1045,7 @@ where
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(untagged)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ClientVersion {
     Text(String),
     Components([u32; 3]),
@@ -969,6 +1057,7 @@ pub enum ClientVersion {
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gproxy_protocol_macros::DeclaredFields,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ModelReasoningEffort {
     None,
     Minimal,
@@ -981,4 +1070,146 @@ pub enum ModelReasoningEffort {
     Persistent,
     #[serde(untagged)]
     Custom(String),
+}
+
+// Model-owned presentation text follows the current Codex catalog. Preserve
+// literal values; validation and rendering remain with the consuming client.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    gproxy_protocol_macros::DeclaredFields,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AppsMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_instructions: Option<String>,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    gproxy_protocol_macros::DeclaredFields,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HistoryToolMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_windows: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_items: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_item: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_contents: Option<ToolMessage>,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    gproxy_protocol_macros::DeclaredFields,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct NotesToolMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_files_by_prefix: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_file: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_contents: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub append_to_file: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_file: Option<ToolMessage>,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    gproxy_protocol_macros::DeclaredFields,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ContextManagementToolMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_context: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub get_context_remaining: Option<ToolMessage>,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    gproxy_protocol_macros::DeclaredFields,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct IncrementalToolMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_update_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_tools_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_namespaces_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_instructions_prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_instructions_cleared: Option<String>,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    gproxy_protocol_macros::DeclaredFields,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct GranularApprovalMessages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intro: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompted_categories: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_categories: Option<String>,
+    #[serde(default, flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub rest: Rest,
 }

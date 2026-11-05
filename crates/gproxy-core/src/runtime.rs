@@ -7,18 +7,19 @@ use gproxy_channel::channel::QuotaScope;
 use gproxy_protocol::Operation;
 use serde::{Deserialize, Serialize};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 
 /// One coherent decrypted version: everything the Store changes under the
-/// credential's version CAS (secret, expiry, lifecycle status). Never
+/// credential's version CAS (secret, metadata, expiry, lifecycle status). Never
 /// Debug/Serialize and never a cache notification payload. Persist the whole
 /// replacement before publishing it.
 pub struct CredentialVersion {
     pub version: i64,
     pub expires_at_ms: Option<i64>,
     pub secret: serde_json::Value,
+    pub metadata: serde_json::Value,
     /// Dead is never selected and never refreshed: a person must log in again.
     pub status: CredentialStatus,
     pub status_reason: Option<String>,
@@ -26,17 +27,36 @@ pub struct CredentialVersion {
 pub struct CredentialState {
     current: ArcSwap<CredentialVersion>,
     retired: AtomicBool,
+    refresh_rejection: Mutex<Option<(i64, String)>>,
 }
 impl CredentialState {
     pub fn new(current: Arc<CredentialVersion>) -> Self {
         Self {
             current: ArcSwap::from(current),
             retired: AtomicBool::new(false),
+            refresh_rejection: Mutex::new(None),
         }
     }
     /// Each attempt pins this Arc; a concurrent refresh cannot change it in place.
     pub fn load(&self) -> Arc<CredentialVersion> {
         self.current.load_full()
+    }
+    pub(crate) fn refresh_rejection(&self, version: i64) -> Option<String> {
+        self.refresh_rejection
+            .lock()
+            .expect("credential refresh rejection lock")
+            .as_ref()
+            .filter(|(rejected_version, _)| *rejected_version == version)
+            .map(|(_, reason)| reason.clone())
+    }
+    pub(crate) fn reject_refresh(&self, version: i64, reason: String) {
+        let mut rejection = self
+            .refresh_rejection
+            .lock()
+            .expect("credential refresh rejection lock");
+        if self.current.load().version == version {
+            *rejection = Some((version, reason));
+        }
     }
     /// The Store row is gone. In-flight attempts keep their pinned version;
     /// selection stops offering this slot until a reload replaces it.
@@ -79,6 +99,11 @@ pub struct CredentialAffinity {
     pub credential_id: String,
     pub anchored_at_ms: i64,
     pub last_success_at_ms: i64,
+    /// How long the upstream's prompt cache stays warm after a use, which is
+    /// how long the pin outlives the session's last request. None is the
+    /// channel's default.
+    #[serde(default)]
+    pub warm_ms: Option<i64>,
 }
 /// Where a block came from. Quota blocks end at the dimension's reset; failure
 /// and rate-limit blocks end at a cooldown chosen by core.
@@ -98,11 +123,20 @@ pub enum BlockSource {
     RateLimited,
     /// Consecutive failures for this scope tripped a cooldown.
     Failures { consecutive: u32 },
+    /// The upstream refused because a usage allowance it did not declare as a
+    /// quota dimension is spent; ends when the refusal said it resets.
+    Exhausted,
+    /// The upstream refused for lack of balance or inactive billing.
+    Credit,
+    /// The upstream does not serve the blocked model on this credential.
+    Unserved,
 }
 
 impl BlockSource {
     /// Paid usage only bypasses subscription exhaustion declared by the channel.
     /// The exhaustion record remains available when the permission is disabled.
+    /// An operator cap is the stronger statement: a capped credential stops at
+    /// its cap, and so at real exhaustion too, whatever paid usage allows.
     pub fn is_enforced(
         &self,
         provider: &crate::ProviderData,
@@ -111,6 +145,9 @@ impl BlockSource {
         let Self::QuotaExhausted { dimension, .. } = self else {
             return true;
         };
+        if crate::quota::cap_percent(credential).is_some() {
+            return true;
+        }
         let Some(model) = provider.channel.quota_model() else {
             return true;
         };
@@ -131,7 +168,10 @@ impl BlockSource {
             )
             | (Self::Counted { dimension: a }, Self::Counted { dimension: b }) => a == b,
             (Self::RateLimited, Self::RateLimited)
-            | (Self::Failures { .. }, Self::Failures { .. }) => true,
+            | (Self::Failures { .. }, Self::Failures { .. })
+            | (Self::Exhausted, Self::Exhausted)
+            | (Self::Credit, Self::Credit)
+            | (Self::Unserved, Self::Unserved) => true,
             _ => false,
         }
     }
@@ -217,6 +257,31 @@ impl CredentialBlocks {
         });
     }
 
+    /// Request-scoped upstream continuation permissions do not modify the
+    /// stored blocks and cannot exempt local limits or transport cooldowns.
+    pub fn retain_for_request(
+        &mut self,
+        provider: &crate::ProviderData,
+        credential: &crate::CredentialData,
+        model: Option<&str>,
+        operation: gproxy_protocol::OperationKey,
+        headers: &http::HeaderMap,
+    ) {
+        self.retain_enforced(provider, credential, model);
+        let Some(quota) = provider.channel.quota_model() else {
+            return;
+        };
+        self.blocks.retain(|block| match &block.source {
+            BlockSource::QuotaExhausted { dimension, .. } => !quota.allows_exhausted_request(
+                crate::execute::prepare::provider_view(provider),
+                dimension,
+                operation,
+                headers,
+            ),
+            _ => true,
+        });
+    }
+
     /// Insert or replace the block for the same scope, operation and origin,
     /// dropping blocks that already expired.
     pub fn upsert(&mut self, block: CredentialBlock, now_ms: i64) {
@@ -249,6 +314,26 @@ impl CredentialBlocks {
             .iter()
             .filter(|block| block.until_ms > now_ms && block.applies_to(upstream_model, operation))
             .max_by_key(|block| block.until_ms)
+    }
+    /// Whether every block covering this model/operation at `now_ms` is a
+    /// short cooldown (rate limiting or a failure streak) that a single
+    /// request may probe early. Quota, credit, counted and unserved blocks
+    /// are never probed.
+    pub fn probeable(
+        &self,
+        upstream_model: Option<&str>,
+        operation: Operation,
+        now_ms: i64,
+    ) -> bool {
+        self.blocks
+            .iter()
+            .filter(|block| block.until_ms > now_ms && block.applies_to(upstream_model, operation))
+            .all(|block| {
+                matches!(
+                    block.source,
+                    BlockSource::RateLimited | BlockSource::Failures { .. }
+                )
+            })
     }
     /// The streak recorded for exactly this scope/operation pair.
     pub fn streak(

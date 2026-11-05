@@ -18,7 +18,6 @@ pub(super) fn claude(
         (input.inference_geo.is_some(), "inference_geo"),
         (input.mcp_servers.is_some(), "mcp_servers"),
         (input.speed.is_some(), "speed"),
-        (input.top_k.is_some(), "top_k"),
         (
             input
                 .output_config
@@ -31,13 +30,8 @@ pub(super) fn claude(
             report.omitted(field, "field has no target representation");
         }
     }
-    for (present, field) in [
-        (input.cache_control.is_some(), "cache_control"),
-        (input.diagnostics.is_some(), "diagnostics"),
-    ] {
-        if present {
-            report.omitted(field, "Chat has no equivalent advisory field");
-        }
+    if input.diagnostics.is_some() {
+        report.omitted("diagnostics", "Chat has no equivalent advisory field");
     }
 
     Ok(())
@@ -48,6 +42,8 @@ pub(super) fn chat(
     report: &mut Report,
 ) -> Result<(), TransformError> {
     for (present, field) in [
+        (input.temperature.flatten().is_some(), "temperature"),
+        (input.top_p.flatten().is_some(), "top_p"),
         (
             input.audio.as_ref().and_then(Option::as_ref).is_some(),
             "audio",
@@ -114,10 +110,14 @@ pub(super) fn chat(
                 .prompt_cache_key
                 .as_ref()
                 .and_then(Option::as_ref)
-                .is_some(),
+                .is_some()
+                && (input.prompt_cache_options.is_some()
+                    || crate::transform::generate::prompt_cache::key_implicit(
+                        input.prompt_cache_key.as_ref(),
+                    )
+                    .is_none()),
             "prompt_cache_key",
         ),
-        (input.prompt_cache_options.is_some(), "prompt_cache_options"),
         (
             input.prompt_cache_retention.flatten().is_some(),
             "prompt_cache_retention",

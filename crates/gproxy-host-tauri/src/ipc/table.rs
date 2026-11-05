@@ -412,7 +412,6 @@ ipc_table! {
         authcode_complete(request: sdk::AuthCodeComplete);
         device_start(request: sdk::DeviceStart);
         device_poll[login_session_id];
-        cookie_exchange(request: sdk::CookieExchange);
     }
 
     @manual {
@@ -454,9 +453,13 @@ ipc_table! {
         desktop preferences language => desktop_preferences_language;
         desktop background set => desktop_background_set;
         desktop application action => desktop_application_action;
+        desktop fonts status => desktop_fonts_status;
+        desktop fonts download => desktop_fonts_download;
+        desktop fonts remove => desktop_fonts_remove;
         desktop setup status => desktop_setup_status;
         desktop setup complete => desktop_setup_complete;
         desktop setup pick_directory => desktop_setup_pick_directory;
+        desktop setup channels => desktop_setup_channels;
         desktop instance status => desktop_instance_status;
         desktop instance gateway_key => desktop_instance_gateway_key;
         desktop instance reload => desktop_instance_reload;
@@ -853,6 +856,13 @@ pub fn desktop_setup_status(
     )
 }
 
+/// The channels this build carries, for the wizard's picker. A constant of the
+/// build, so it needs no instance.
+#[tauri::command]
+pub fn desktop_setup_channels() -> IpcResult<serde_json::Value> {
+    json(Ok::<_, gproxy_app::AppError>(gproxy::setup::channels()))
+}
+
 /// Secrets in this request are transient and must not be written to the audit log.
 #[tauri::command]
 pub async fn desktop_setup_complete<R: tauri::Runtime>(
@@ -974,4 +984,36 @@ pub async fn desktop_application_action(action: String) -> IpcResult<serde_json:
         )
         .into())
     }
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_fonts_status(
+    fonts: tauri::State<'_, crate::fonts::FontConsole>,
+) -> IpcResult<serde_json::Value> {
+    serde_json::to_value(fonts.0.fonts().status().await).map_err(crate::IpcError::internal)
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_fonts_download(
+    fonts: tauri::State<'_, crate::fonts::FontConsole>,
+) -> IpcResult<serde_json::Value> {
+    let status = fonts
+        .0
+        .download_fonts()
+        .await
+        .map_err(crate::IpcError::internal)?;
+    serde_json::to_value(status).map_err(crate::IpcError::internal)
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_fonts_remove(
+    fonts: tauri::State<'_, crate::fonts::FontConsole>,
+) -> IpcResult<serde_json::Value> {
+    let status = fonts
+        .0
+        .fonts()
+        .remove()
+        .await
+        .map_err(crate::IpcError::internal)?;
+    serde_json::to_value(status).map_err(crate::IpcError::internal)
 }

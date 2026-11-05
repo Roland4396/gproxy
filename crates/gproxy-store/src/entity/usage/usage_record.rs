@@ -38,6 +38,9 @@ pub struct Model {
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    /// Cache writes as [{tokens, ttl_seconds}]; None means not reported.
+    pub cache_creation: Option<Json>,
+    /// Legacy columns, read only for records predating dynamic retention.
     pub cache_creation_5m_tokens: Option<i64>,
     pub cache_creation_30m_tokens: Option<i64>,
     pub cache_creation_1h_tokens: Option<i64>,
@@ -159,6 +162,10 @@ pub struct Model {
     pub state: Option<String>,
     pub completeness: Option<String>,
     pub actual_service_tier: Option<String>,
+    /// The model the upstream response named, read after the channel shaped
+    /// it and before any conversion for the client. `model` is the one the
+    /// call was routed to; the two may differ. None when it named none.
+    pub response_model: Option<String>,
     /// Dynamic quantities, pricing dimensions and nested protocol-specific detail only.
     pub metrics: Json,
     /// For subscription requests, the settled charge is denominated in USD.

@@ -7,32 +7,35 @@ use super::{RealtimeFunctionTool, ToolChoiceFunction, ToolChoiceMcp, ToolChoiceO
 use crate::Rest;
 use serde::{Deserialize, Serialize};
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolChoice`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolChoice`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeSessionCreateResponseToolChoice {
     ToolChoiceOptions(ToolChoiceOptions),
     ToolChoiceFunction(ToolChoiceFunction),
     ToolChoiceMcp(ToolChoiceMcp),
 }
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `Tool`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `Tool`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeSessionCreateResponseTool {
     RealtimeFunctionTool(RealtimeFunctionTool),
     RealtimeSessionCreateResponseToolMcpTool(RealtimeSessionCreateResponseToolMcpTool),
 }
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpTool`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpTool`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeSessionCreateResponseToolMcpTool {
     pub server_label: String,
     #[serde(rename = "type")]
@@ -102,11 +105,12 @@ pub struct RealtimeSessionCreateResponseToolMcpTool {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolAllowedTools`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolAllowedTools`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeSessionCreateResponseToolMcpToolAllowedTools {
     Items(Vec<String>),
     RealtimeSessionCreateResponseToolMcpToolAllowedToolsMcpToolFilter(
@@ -115,11 +119,12 @@ pub enum RealtimeSessionCreateResponseToolMcpToolAllowedTools {
     Variant3(()),
 }
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolRequireApproval`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolRequireApproval`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[serde(untagged)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeSessionCreateResponseToolMcpToolRequireApproval {
     RealtimeSessionCreateResponseToolMcpToolRequireApprovalMcpToolApprovalFilter(
         RealtimeSessionCreateResponseToolMcpToolRequireApprovalMcpToolApprovalFilter,
@@ -128,10 +133,11 @@ pub enum RealtimeSessionCreateResponseToolMcpToolRequireApproval {
     Variant3(()),
 }
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolAllowedToolsMcpToolFilter`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolAllowedToolsMcpToolFilter`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeSessionCreateResponseToolMcpToolAllowedToolsMcpToolFilter {
     #[serde(
         default,
@@ -149,10 +155,11 @@ pub struct RealtimeSessionCreateResponseToolMcpToolAllowedToolsMcpToolFilter {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolRequireApprovalMcpToolApprovalFilter`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolRequireApprovalMcpToolApprovalFilter`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeSessionCreateResponseToolMcpToolRequireApprovalMcpToolApprovalFilter {
     #[serde(
         default,
@@ -174,10 +181,11 @@ pub struct RealtimeSessionCreateResponseToolMcpToolRequireApprovalMcpToolApprova
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolRequireApprovalMcpToolApprovalFilterAlways`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolRequireApprovalMcpToolApprovalFilterAlways`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeSessionCreateResponseToolMcpToolRequireApprovalMcpToolApprovalFilterAlways {
     #[serde(
         default,
@@ -195,10 +203,11 @@ pub struct RealtimeSessionCreateResponseToolMcpToolRequireApprovalMcpToolApprova
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolRequireApprovalMcpToolApprovalFilterNever`.
+// Source: `openai/types/realtime/realtime_session_create_response.py`, `ToolMcpToolRequireApprovalMcpToolApprovalFilterNever`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RealtimeSessionCreateResponseToolMcpToolRequireApprovalMcpToolApprovalFilterNever {
     #[serde(
         default,
@@ -219,6 +228,7 @@ pub struct RealtimeSessionCreateResponseToolMcpToolRequireApprovalMcpToolApprova
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeSessionCreateResponseToolMcpToolType {
     #[serde(rename = "mcp")]
     Mcp,
@@ -227,6 +237,7 @@ pub enum RealtimeSessionCreateResponseToolMcpToolType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeSessionCreateResponseToolMcpToolAllowedCallersItem {
     #[serde(rename = "direct")]
     Direct,
@@ -237,6 +248,7 @@ pub enum RealtimeSessionCreateResponseToolMcpToolAllowedCallersItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeSessionCreateResponseToolMcpToolConnectorId {
     #[serde(rename = "connector_dropbox")]
     ConnectorDropbox,
@@ -259,6 +271,7 @@ pub enum RealtimeSessionCreateResponseToolMcpToolConnectorId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RealtimeSessionCreateResponseToolMcpToolRequireApprovalVariant2 {
     #[serde(rename = "always")]
     Always,

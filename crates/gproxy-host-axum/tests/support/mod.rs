@@ -404,6 +404,8 @@ pub struct ScriptClient {
     sockets: Mutex<VecDeque<WsReply>>,
     seen: Mutex<Vec<String>>,
     bodies: Mutex<Vec<Value>>,
+    /// The same bodies as sent, for those that are not JSON (multipart).
+    raw_bodies: Mutex<Vec<Bytes>>,
     /// The `authorization` of each handshake, which names the credential.
     handshake_auth: Mutex<Vec<String>>,
 }
@@ -439,6 +441,10 @@ impl ScriptClient {
         self.bodies.lock().unwrap().clone()
     }
 
+    pub fn raw_bodies(&self) -> Vec<Bytes> {
+        self.raw_bodies.lock().unwrap().clone()
+    }
+
     /// The `authorization` header of every handshake, in order.
     pub fn handshake_auth(&self) -> Vec<String> {
         self.handshake_auth.lock().unwrap().clone()
@@ -457,6 +463,7 @@ impl OutboundClient for ScriptClient {
                     .lock()
                     .unwrap()
                     .push(serde_json::from_slice(bytes).unwrap_or(Value::Null));
+                self.raw_bodies.lock().unwrap().push(bytes.clone());
             }
             let reply = self
                 .replies
@@ -878,7 +885,7 @@ pub async fn usage_row(handle: &Handle, request_id: &str, user_id: &str, input_t
         .create_many(vec![usage_record::ActiveModel {
             request_id: Set(request_id.into()),
             user_id: Set(Some(user_id.into())),
-            model: Set("test/m1".into()),
+            model: Set("p1/m1".into()),
             operation: Set("generate_content".into()),
             input_tokens: Set(Some(input_tokens as i64)),
             metrics: Set(json!({})),

@@ -17,6 +17,19 @@ if [ "$TARGET_OS" = android ]; then
         "$root/data/data/com.termux/files/usr/bin/gproxy"
     installed_size="$(du -sk --exclude=DEBIAN "$root" | cut -f1)"
     sed -i "s/^Installed-Size:.*/Installed-Size: $installed_size/" "$root/DEBIAN/control"
+    if [ "${GPROXY_HEADLESS:-false}" = true ]; then
+        # Same `gproxy` command as the full package, so install one or the other.
+        # The recipe already declares Conflicts/Replaces: gproxy-cli; extend them.
+        sed -i -e 's/^Package: gproxy$/Package: gproxy-headless/' \
+            -e 's/^Conflicts: gproxy-cli$/Conflicts: gproxy, gproxy-cli/' \
+            -e 's/^Replaces: gproxy-cli$/Replaces: gproxy, gproxy-cli/' \
+            -e 's/^Description: .*/Description: AI API gateway with provider routing, without the web console/' "$root/DEBIAN/control"
+        printf 'Provides: gproxy\n' >> "$root/DEBIAN/control"
+        grep -qx 'Package: gproxy-headless' "$root/DEBIAN/control"
+        grep -qx 'Conflicts: gproxy, gproxy-cli' "$root/DEBIAN/control"
+        grep -qx 'Replaces: gproxy, gproxy-cli' "$root/DEBIAN/control"
+        test "$(grep -c '^Provides:' "$root/DEBIAN/control")" = 1
+    fi
     python3 scripts/reproducible-env.py --normalize-tree "$root"
     dpkg-deb --root-owner-group --build "$root" "$output/$ARTIFACT_NAME.deb"
     (cd "$output" && sha256sum "$ARTIFACT_NAME.deb" > "$ARTIFACT_NAME.deb.sha256")

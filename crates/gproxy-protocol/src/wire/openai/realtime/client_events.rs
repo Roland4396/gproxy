@@ -10,10 +10,11 @@ use super::{
 use crate::Rest;
 use serde::{Deserialize, Serialize};
 
-/// Source: `openai/types/realtime/conversation_item_create_event.py`, `ConversationItemCreateEvent`.
+// Source: `openai/types/realtime/conversation_item_create_event.py`, `ConversationItemCreateEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConversationItemCreateEvent {
     pub item: ConversationItem,
     #[serde(rename = "type")]
@@ -34,10 +35,11 @@ pub struct ConversationItemCreateEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/conversation_item_delete_event.py`, `ConversationItemDeleteEvent`.
+// Source: `openai/types/realtime/conversation_item_delete_event.py`, `ConversationItemDeleteEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConversationItemDeleteEvent {
     pub item_id: String,
     #[serde(rename = "type")]
@@ -52,10 +54,11 @@ pub struct ConversationItemDeleteEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/conversation_item_retrieve_event.py`, `ConversationItemRetrieveEvent`.
+// Source: `openai/types/realtime/conversation_item_retrieve_event.py`, `ConversationItemRetrieveEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConversationItemRetrieveEvent {
     pub item_id: String,
     #[serde(rename = "type")]
@@ -70,10 +73,11 @@ pub struct ConversationItemRetrieveEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/conversation_item_truncate_event.py`, `ConversationItemTruncateEvent`.
+// Source: `openai/types/realtime/conversation_item_truncate_event.py`, `ConversationItemTruncateEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConversationItemTruncateEvent {
     pub audio_end_ms: i64,
     pub content_index: i64,
@@ -90,10 +94,11 @@ pub struct ConversationItemTruncateEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/input_audio_buffer_append_event.py`, `InputAudioBufferAppendEvent`.
+// Source: `openai/types/realtime/input_audio_buffer_append_event.py`, `InputAudioBufferAppendEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferAppendEvent {
     pub audio: String,
     #[serde(rename = "type")]
@@ -108,10 +113,11 @@ pub struct InputAudioBufferAppendEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/input_audio_buffer_clear_event.py`, `InputAudioBufferClearEvent`.
+// Source: `openai/types/realtime/input_audio_buffer_clear_event.py`, `InputAudioBufferClearEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferClearEvent {
     #[serde(rename = "type")]
     pub type_: InputAudioBufferClearEventType,
@@ -125,10 +131,11 @@ pub struct InputAudioBufferClearEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/output_audio_buffer_clear_event.py`, `OutputAudioBufferClearEvent`.
+// Source: `openai/types/realtime/output_audio_buffer_clear_event.py`, `OutputAudioBufferClearEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OutputAudioBufferClearEvent {
     #[serde(rename = "type")]
     pub type_: OutputAudioBufferClearEventType,
@@ -142,10 +149,11 @@ pub struct OutputAudioBufferClearEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/input_audio_buffer_commit_event.py`, `InputAudioBufferCommitEvent`.
+// Source: `openai/types/realtime/input_audio_buffer_commit_event.py`, `InputAudioBufferCommitEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InputAudioBufferCommitEvent {
     #[serde(rename = "type")]
     pub type_: InputAudioBufferCommitEventType,
@@ -159,10 +167,11 @@ pub struct InputAudioBufferCommitEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_cancel_event.py`, `ResponseCancelEvent`.
+// Source: `openai/types/realtime/response_cancel_event.py`, `ResponseCancelEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseCancelEvent {
     #[serde(rename = "type")]
     pub type_: ResponseCancelEventType,
@@ -182,10 +191,11 @@ pub struct ResponseCancelEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/response_create_event.py`, `ResponseCreateEvent`.
+// Source: `openai/types/realtime/response_create_event.py`, `ResponseCreateEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResponseCreateEvent {
     #[serde(rename = "type")]
     pub type_: ResponseCreateEventType,
@@ -205,10 +215,11 @@ pub struct ResponseCreateEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/session_update_event.py`, `SessionUpdateEvent`.
+// Source: `openai/types/realtime/session_update_event.py`, `SessionUpdateEvent`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, gproxy_protocol_macros::WireBuilder)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionUpdateEvent {
     pub session: SessionUpdateEventSession,
     #[serde(rename = "type")]
@@ -223,12 +234,13 @@ pub struct SessionUpdateEvent {
     pub rest: Rest,
 }
 
-/// Source: `openai/types/realtime/session_update_event.py`, `Session`.
+// Source: `openai/types/realtime/session_update_event.py`, `Session`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SessionUpdateEventSession {
     RealtimeSessionCreateRequest(RealtimeSessionCreateRequest),
     RealtimeTranscriptionSessionCreateRequest(RealtimeTranscriptionSessionCreateRequest),
@@ -237,6 +249,7 @@ pub enum SessionUpdateEventSession {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConversationItemCreateEventType {
     #[serde(rename = "conversation.item.create")]
     ConversationItemCreate,
@@ -245,6 +258,7 @@ pub enum ConversationItemCreateEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConversationItemDeleteEventType {
     #[serde(rename = "conversation.item.delete")]
     ConversationItemDelete,
@@ -253,6 +267,7 @@ pub enum ConversationItemDeleteEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConversationItemRetrieveEventType {
     #[serde(rename = "conversation.item.retrieve")]
     ConversationItemRetrieve,
@@ -261,6 +276,7 @@ pub enum ConversationItemRetrieveEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConversationItemTruncateEventType {
     #[serde(rename = "conversation.item.truncate")]
     ConversationItemTruncate,
@@ -269,6 +285,7 @@ pub enum ConversationItemTruncateEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferAppendEventType {
     #[serde(rename = "input_audio_buffer.append")]
     InputAudioBufferAppend,
@@ -277,6 +294,7 @@ pub enum InputAudioBufferAppendEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferClearEventType {
     #[serde(rename = "input_audio_buffer.clear")]
     InputAudioBufferClear,
@@ -285,6 +303,7 @@ pub enum InputAudioBufferClearEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OutputAudioBufferClearEventType {
     #[serde(rename = "output_audio_buffer.clear")]
     OutputAudioBufferClear,
@@ -293,6 +312,7 @@ pub enum OutputAudioBufferClearEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputAudioBufferCommitEventType {
     #[serde(rename = "input_audio_buffer.commit")]
     InputAudioBufferCommit,
@@ -301,6 +321,7 @@ pub enum InputAudioBufferCommitEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseCancelEventType {
     #[serde(rename = "response.cancel")]
     ResponseCancel,
@@ -309,6 +330,7 @@ pub enum ResponseCancelEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ResponseCreateEventType {
     #[serde(rename = "response.create")]
     ResponseCreate,
@@ -317,6 +339,7 @@ pub enum ResponseCreateEventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(not(feature = "exhaustive"), non_exhaustive)]
 #[derive(gproxy_protocol_macros::DeclaredFields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SessionUpdateEventType {
     #[serde(rename = "session.update")]
     SessionUpdate,

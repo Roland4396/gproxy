@@ -30,13 +30,16 @@ const SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const ASSERTION_TTL_SECONDS: u64 = 3_600;
 /// A token response without `expires_in` is treated as the documented hour.
 const DEFAULT_EXPIRES_IN_SECONDS: i64 = 3_600;
-const MAX_TOKEN_BODY: usize = 64 * 1024;
 
 /// The access token `prepare` puts in the `Authorization` header. Absent means
 /// no refresh has run yet, which is a credential the host must refresh before
 /// it can serve a request, not a request the channel can rescue.
 pub(super) fn access_token(secret: &Value) -> Result<&str, ChannelError> {
     field(secret, "access_token").ok_or(ChannelError::InvalidCredential)
+}
+
+pub(super) fn validate_secret(secret: &Value) -> Result<(), ChannelError> {
+    ServiceAccount::parse(secret).map(|_| ())
 }
 
 impl CredentialRefresh for Vertex {
@@ -81,34 +84,31 @@ impl CredentialRefresh for Vertex {
 
 /// A refusal the upstream will repeat forever versus one worth retrying.
 ///
-/// Google answers a revoked, deleted or disabled service-account key with
-/// `400 invalid_grant`, and a key whose project lost the API with `401`/`403`.
-/// Those are definitive: the host marks the credential dead and a person has
-/// to paste a new key. A `429` or a `5xx` from the token endpoint is the token
-/// endpoint having a bad minute and must stay retryable.
+/// Google answers a revoked, deleted or disabled service-account key with an
+/// OAuth error body, `invalid_grant` or `invalid_client`. Those are
+/// definitive: the host marks the credential dead and a person has to paste a
+/// new key. Anything else, including a bare 4xx with no OAuth error (a proxy
+/// in front of a custom `token_uri`, say), a `429` or a `5xx`, stays
+/// retryable; google-auth-library's gtoken keeps no permanent state on any
+/// token failure and simply rethrows.
 fn reject(status: StatusCode, body: &[u8]) -> ChannelError {
     let code = serde_json::from_slice::<Value>(body)
         .ok()
         .and_then(|value| match value.get("error") {
-            Some(Value::String(code)) => Some(code.clone()),
-            Some(Value::Object(error)) => error
-                .get("status")
-                .or_else(|| error.get("message"))
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            Some(Value::String(code)) => Some(code.trim().to_ascii_lowercase()),
             _ => None,
         });
-    let definitive = matches!(
-        status,
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::BAD_REQUEST
-    ) && code.as_deref() != Some("internal_failure");
-    if definitive {
-        ChannelError::RefreshRejected(code.unwrap_or_else(|| format!("http {}", status.as_u16())))
-    } else {
-        ChannelError::UpstreamResponse {
+    match code {
+        Some(code)
+            if status.is_client_error()
+                && matches!(code.as_str(), "invalid_grant" | "invalid_client") =>
+        {
+            ChannelError::RefreshRejected(code)
+        }
+        _ => ChannelError::UpstreamResponse {
             status,
             body: Bytes::copy_from_slice(body),
-        }
+        },
     }
 }
 
@@ -133,6 +133,7 @@ fn rotate(secret: &Value, token: &Value) -> Result<CredentialUpdate, ChannelErro
     object.insert("access_token".into(), Value::String(access.to_owned()));
     object.insert("expires_at_ms".into(), Value::from(expires_at_ms));
     Ok(CredentialUpdate {
+        metadata: None,
         secret,
         expires_at_ms: Some(expires_at_ms),
     })
@@ -234,24 +235,7 @@ fn percent_encode(value: &str) -> String {
 }
 
 async fn read_body(body: HttpBody) -> Result<Bytes, ChannelError> {
-    use futures_util::StreamExt as _;
-    match body {
-        HttpBody::Bytes(bytes) => Ok(bytes),
-        HttpBody::Stream(mut stream) => {
-            let mut out = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk =
-                    chunk.map_err(|error| ChannelError::InvalidResponse(error.to_string()))?;
-                out.extend_from_slice(&chunk);
-                if out.len() > MAX_TOKEN_BODY {
-                    return Err(ChannelError::InvalidResponse(
-                        "token response exceeds the read limit".into(),
-                    ));
-                }
-            }
-            Ok(Bytes::from(out))
-        }
-    }
+    crate::channel::read_body(body).await
 }
 
 fn field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {

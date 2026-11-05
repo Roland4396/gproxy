@@ -1,11 +1,8 @@
 //! Model selection in WebRTC offers: JSON session envelopes and multipart
 //! session fields. SDP and all unrelated fields survive model mapping.
+use crate::form::{field, multipart};
 use crate::{CoreError, CoreResult, PathSegment};
-use gproxy_protocol::{
-    HttpBody, WireRequest,
-    codec::{CodecLimits, MultipartDecoder, MultipartEncoder, read_http_body},
-    connection::{Bytes, MultipartPart},
-};
+use gproxy_protocol::{HttpBody, WireRequest, codec::CodecLimits, connection::Bytes};
 use http::{HeaderMap, header};
 use serde_json::Value;
 
@@ -13,47 +10,35 @@ fn invalid(error: impl std::fmt::Display) -> CoreError {
     CoreError::InvalidTarget(format!("invalid realtime offer: {error}"))
 }
 
-fn field(headers: &HeaderMap, name: http::HeaderName, key: &str) -> Option<String> {
-    headers
-        .get(name)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .skip(1)
-        .find_map(|part| {
-            let (name, value) = part.trim().split_once('=')?;
-            name.eq_ignore_ascii_case(key)
-                .then(|| value.trim().trim_matches('"').to_owned())
-        })
-}
-
-async fn multipart(
+/// Read audio settings from either the JSON envelope or the multipart session.
+/// Voice ownership checks use the same decoding rules as model selection.
+pub(crate) async fn session_value(
     headers: &HeaderMap,
-    bytes: &Bytes,
+    body: &[u8],
     limits: CodecLimits,
-) -> CoreResult<Option<(String, Vec<MultipartPart>)>> {
-    if !headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(';')
-                .next()
-                .is_some_and(|m| m.trim().eq_ignore_ascii_case("multipart/form-data"))
-        })
-    {
-        return Ok(None);
+) -> CoreResult<Option<Value>> {
+    let bytes = Bytes::copy_from_slice(body);
+    if let Some((_, parts)) = multipart(headers, &bytes, limits).await? {
+        let mut session = None;
+        for part in parts {
+            if field(&part.headers, header::CONTENT_DISPOSITION, "name").as_deref()
+                != Some("session")
+            {
+                continue;
+            }
+            if session.is_some() {
+                return Err(invalid("duplicate session field"));
+            }
+            let HttpBody::Bytes(bytes) = part.body else {
+                unreachable!()
+            };
+            session = Some(serde_json::from_slice(&bytes).map_err(invalid)?);
+        }
+        return Ok(session);
     }
-    let boundary = field(headers, header::CONTENT_TYPE, "boundary")
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| invalid("multipart boundary missing"))?;
-    let mut decoder = MultipartDecoder::new(HttpBody::Bytes(bytes.clone()), &boundary, limits)
-        .map_err(invalid)?;
-    let mut parts = Vec::new();
-    while let Some(mut part) = decoder.next_part().await.map_err(invalid)? {
-        part.body = HttpBody::Bytes(read_http_body(part.body, limits).await.map_err(invalid)?);
-        parts.push(part);
-    }
-    Ok(Some((boundary, parts)))
+    Ok(serde_json::from_slice::<Value>(body)
+        .ok()
+        .map(|mut value| value.get_mut("session").map(Value::take).unwrap_or(value)))
 }
 
 /// Extract a model before admission, without consuming or changing the offer.
@@ -127,12 +112,7 @@ pub(crate) async fn apply_model(
             }
         }
         if changed {
-            let mut encoder = MultipartEncoder::new(boundary, parts, limits).map_err(invalid)?;
-            let mut bytes = Vec::new();
-            while let Some(chunk) = encoder.next_chunk().await.map_err(invalid)? {
-                bytes.extend_from_slice(&chunk);
-            }
-            request.body = HttpBody::Bytes(Bytes::from(bytes));
+            request.body = HttpBody::Bytes(crate::form::encode(boundary, parts, limits).await?);
             request.headers.remove(header::CONTENT_LENGTH);
         }
     } else if let Some(value) = rewrite(

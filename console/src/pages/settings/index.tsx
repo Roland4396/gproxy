@@ -1,4 +1,5 @@
 import { inShell } from "@/lib/transport"
+import { FontSettings } from "@/components/font-settings"
 import { ApplicationSettings } from "./application"
 import { useId, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -80,6 +81,7 @@ export function SettingsPage() {
             {data.data ? <SettingsForm key={data.data.instance.configRevision} original={data.data} /> : null}
           </QueryState>
         </div>
+        {!inShell && info.data?.fontManagement && tab === "general" ? <FontSettings /> : null}
         {inShell ? <TabsContent value="application"><ApplicationSettings /></TabsContent> : null}
         {canTransfer ? <TabsContent value="transfer"><TransferPanel /></TabsContent> : null}
       </Tabs>
@@ -215,6 +217,9 @@ function SettingsForm({ original }: { original: SettingsDto }) {
                 <FieldLabel htmlFor={`${id}-${field.name}`}>{t(`setting.${field.name}`)}</FieldLabel>
                 {control(field)}
                 {field.name === "allowedHeaders" ? <FieldDescription>{t("setting.allowedHeadersHelp")}</FieldDescription> : null}
+                {field.name === "retentionDays" ? <FieldDescription>{t("setting.retentionDaysHelp")}</FieldDescription> : null}
+                {field.name === "usageRetentionDays" ? <FieldDescription>{t("setting.usageRetentionDaysHelp")}</FieldDescription> : null}
+                {field.name === "maxDatabaseSizeMb" ? <FieldDescription>{t("setting.maxDatabaseSizeMbHelp")}</FieldDescription> : null}
               </Field>
             ))}
             {group.id === "tokenizer" ? (
