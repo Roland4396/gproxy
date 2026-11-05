@@ -6,7 +6,10 @@ use gproxy_channel::channel::{
     QuotaAllowance, QuotaEntry, QuotaScope, QuotaSnapshot, QuotaSubject, QuotaValue,
 };
 use gproxy_core::{RequestContext, keys};
-use gproxy_store::entity::{config::setting, upstream::credential};
+use gproxy_store::entity::{
+    config::setting,
+    upstream::{credential, provider},
+};
 use http::StatusCode;
 use sea_orm::Set;
 use serde_json::json;

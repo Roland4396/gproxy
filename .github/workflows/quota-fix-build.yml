@@ -78,11 +78,14 @@ jobs:
         run: |
           cargo fmt --all --check
           python3 -m unittest discover -s _ops/tests -v
-      - name: Backend and channel regressions (synthetic credentials only)
+      - name: Retained local contracts first (synthetic credentials only)
         run: |
-          cargo test --locked \
-            -p gproxy-protocol -p gproxy-client-sdk -p gproxy-channel -p gproxy-core -p gproxy-store \
-            -p gproxy-sdk -p gproxy-app -p gproxy-host-axum -p gproxy --lib --tests
+          cargo test --locked -p gproxy-core --test selection
+          cargo test --locked -p gproxy-channel --test antigravity
+          cargo test --locked -p gproxy-host-axum --test management
+      - name: Complete native workspace regressions (synthetic credentials only)
+        run: |
+          cargo test --locked --lib --tests
       - name: Compile the v4 production CLI/server
         run: cargo build --locked --release --package gproxy --bin gproxy
       - name: Assemble and verify immutable image
