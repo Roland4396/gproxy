@@ -81,7 +81,7 @@ jobs:
       - name: Retained local contracts first (synthetic credentials only)
         run: |
           cargo test --locked -p gproxy-core --test selection
-          cargo test --locked -p gproxy-channel --test antigravity
+          cargo test --locked -p gproxy-channel --features antigravity --test antigravity
           cargo test --locked -p gproxy-host-axum --test management
       - name: Complete native workspace regressions (synthetic credentials only)
         run: |

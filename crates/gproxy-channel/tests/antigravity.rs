@@ -704,10 +704,22 @@ fn account_session_pinning_is_stable_across_content_models_refresh_and_callers()
             for operation in [Operation::GenerateContent, Operation::StreamGenerateContent] {
                 let (next, next_headers) = envelope(original, operation, model, body.clone());
                 assert_eq!(next["request"]["sessionId"], session);
-                for field in ["cascade_id", "trajectory_id", "root_cascade_id"] {
+                if next["requestType"] == "agent" {
+                    for field in ["cascade_id", "trajectory_id", "root_cascade_id"] {
+                        assert_eq!(
+                            next["request"]["labels"][field],
+                            first["request"]["labels"][field]
+                        );
+                    }
+                    if body.pointer("/request/labels/user_label").is_some() {
+                        assert_eq!(next["request"]["labels"]["user_label"], "keep");
+                    }
+                } else {
+                    // Image envelopes have no agent cascade/trajectory labels.
+                    // Preserve caller metadata instead of manufacturing them.
                     assert_eq!(
-                        next["request"]["labels"][field],
-                        first["request"]["labels"][field]
+                        next["request"].get("labels"),
+                        body.pointer("/request/labels")
                     );
                 }
                 assert_eq!(

@@ -34,10 +34,14 @@ class Mock(BaseHTTPRequestHandler):
   assert parsed.version==4 and str(parsed)==header
   row={'account':account,'sessionId':session,'headerSessionId':header,
    'requestId':body['requestId'],'model':body['model'],'stream':'alt=sse' in self.path}
-  labels=request['labels'];row.update(cascadeId=labels['cascade_id'],trajectoryId=labels['trajectory_id'])
-  assert str(uuid.UUID(row['cascadeId']))==row['cascadeId']
-  assert str(uuid.UUID(row['trajectoryId']))==row['trajectoryId']
-  assert labels['root_cascade_id']==row['cascadeId']
+  if body['requestType']=='agent':
+   labels=request['labels'];row.update(cascadeId=labels['cascade_id'],trajectoryId=labels['trajectory_id'])
+   assert str(uuid.UUID(row['cascadeId']))==row['cascadeId']
+   assert str(uuid.UUID(row['trajectoryId']))==row['trajectoryId']
+   assert labels['root_cascade_id']==row['cascadeId']
+  else:
+   assert body['requestType']=='image_gen' and 'labels' not in request
+   row.update(cascadeId=None,trajectoryId=None)
   observed.append(row)
   if fail_once:
    fail_once=False;row['status']=503
@@ -125,12 +129,12 @@ for account,cid in [('a',a),('b',b)]:
  rows=[r for r in observed if r['account']==account]
  assert rows and {r['sessionId'] for r in rows}=={expected(cid)}
  assert len({r['headerSessionId'] for r in rows})==1
- assert len({r['cascadeId'] for r in rows})==1
- assert len({r['trajectoryId'] for r in rows})==1
+ assert len({r['cascadeId'] for r in rows if r['cascadeId'] is not None})==1
+ assert len({r['trajectoryId'] for r in rows if r['trajectoryId'] is not None})==1
 assert len({r['sessionId'] for r in observed})==2
 assert len({r['headerSessionId'] for r in observed})==2
-assert len({r['cascadeId'] for r in observed})==2
-assert len({r['trajectoryId'] for r in observed})==2
+assert len({r['cascadeId'] for r in observed if r['cascadeId'] is not None})==2
+assert len({r['trajectoryId'] for r in observed if r['trajectoryId'] is not None})==2
 assert len({r['requestId'] for r in observed})==len(observed)
 server.shutdown();server.server_close()
 print(json.dumps({'observed':observed,'stream_unbuffered':True}))
