@@ -162,6 +162,12 @@ impl QuotaModel for Antigravity {
         declared: &'d [QuotaDimension],
         entry: &QuotaEntry,
     ) -> Option<Cow<'d, QuotaDimension>> {
+        // Upstream's generic classifier now keys solely on source_id. Our
+        // inactive marker remains visible to management, but must never open
+        // a quota cycle, affect reset ordering or make a spent window usable.
+        if entry.label.as_deref() == Some("antigravity_disabled") {
+            return None;
+        }
         let dimension = classify_by_id(declared, entry)?;
         if dimension.scope != QuotaScope::Unknown
             || !matches!(entry.model_scope, QuotaScope::Models(_))
