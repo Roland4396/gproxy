@@ -241,6 +241,14 @@ pub trait QuotaModel: Send + Sync {
         true
     }
 
+    /// A successful fresh quota query may supersede an earlier unclassified
+    /// upstream exhaustion reply. Opt-in only: prove that every model in the
+    /// finite blocked scope has positive authoritative windows. Core still
+    /// preserves newer refusals, rate limits, credit and local-budget blocks.
+    fn exhaustion_recovered(&self, _scope: &QuotaScope, _entries: &[QuotaEntry]) -> bool {
+        false
+    }
+
     /// The dimension an observed entry reports on, as the host should apply
     /// it; None makes the entry observe-only. `declared` is what `dimensions`
     /// returned for this credential, plus any host-added dimensions. The

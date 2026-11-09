@@ -733,18 +733,30 @@ impl<C: BatchConnectionTrait> Core<C> {
         let ids: Vec<_> = rows
             .into_iter()
             .filter(|row| {
-                row.source["kind"] == "quota_exhausted"
-                    && recovered.iter().any(|(dimension, scope)| {
+                let scope = serde_json::from_value::<QuotaScope>(row.scope.clone()).ok();
+                (row.source["kind"] == "quota_exhausted"
+                    && recovered.iter().any(|(dimension, recovered_scope)| {
                         row.source["dimension"] == *dimension
-                            && serde_json::from_value::<QuotaScope>(row.scope.clone())
-                                .ok()
-                                .is_some_and(|stored| stored.same_pool(scope))
-                    })
+                            && scope
+                                .as_ref()
+                                .is_some_and(|stored| stored.same_pool(recovered_scope))
+                    }))
+                    || (row.source["kind"] == "exhausted"
+                        && scope.as_ref().is_some_and(|scope| {
+                            model.is_some_and(|model| model.exhaustion_recovered(scope, entries))
+                        }))
             })
             .map(|row| row.id)
             .collect();
         if !ids.is_empty() {
-            self.store().credential_blocks().delete_many(&ids).await?;
+            self.store()
+                .credential_blocks()
+                .delete_where_many(vec![
+                    credential_block::Entity::delete_many()
+                        .filter(credential_block::Column::Id.is_in(ids))
+                        .filter(credential_block::Column::ObservedAtMs.lte(queried_at_ms)),
+                ])
+                .await?;
         }
         let key = crate::keys::credential_blocks(&credential.provider_id, &credential.id);
         loop {
@@ -754,9 +766,19 @@ impl<C: BatchConnectionTrait> Core<C> {
             let mut blocks: crate::CredentialBlocks = serde_json::from_slice(&cached.value)
                 .map_err(|e| CoreError::Rewrite(e.to_string()))?;
             let before = blocks.blocks.len();
-            blocks.blocks.retain(|block| !(block.observed_at_ms <= queried_at_ms
-                && matches!(&block.source, BlockSource::QuotaExhausted { dimension, .. }
-                    if recovered.iter().any(|(id, scope)| id == dimension && scope.same_pool(&block.scope)))));
+            blocks.blocks.retain(|block| {
+                if block.observed_at_ms > queried_at_ms {
+                    return true;
+                }
+                match &block.source {
+                    BlockSource::QuotaExhausted { dimension, .. } => !recovered
+                        .iter()
+                        .any(|(id, scope)| id == dimension && scope.same_pool(&block.scope)),
+                    BlockSource::Exhausted => !model
+                        .is_some_and(|model| model.exhaustion_recovered(&block.scope, entries)),
+                    _ => true,
+                }
+            });
             if blocks.blocks.len() == before {
                 return Ok(());
             }

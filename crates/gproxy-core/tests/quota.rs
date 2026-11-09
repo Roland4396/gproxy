@@ -963,3 +963,132 @@ async fn pool_usage_merges_the_open_cycles_of_the_target() {
     assert_eq!(windows[0]["reset_at_ms"], base + hour);
     assert_eq!(windows[0]["period_start_ms"], base + hour - 18_000_000);
 }
+
+#[tokio::test]
+async fn positive_probe_recovers_only_opted_in_older_model_refusals_in_store_and_cache() {
+    use gproxy_core::{CredentialBlock, CredentialBlocks, keys};
+    use gproxy_store::entity::limits::credential_block;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let h = harness(full(), "sticky").await;
+    seed_quota_provider(
+        &h,
+        json!({"quota":[
+            {"id":"primary","metric":"requests","tracking":"reported"}
+        ]}),
+    )
+    .await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let scoped = QuotaScope::Models(vec!["m".into()]);
+    let cases = vec![
+        ("old", scoped.clone(), BlockSource::Exhausted, 0),
+        (
+            "new",
+            scoped.clone(),
+            BlockSource::Exhausted,
+            now + 3_600_000,
+        ),
+        (
+            "other",
+            QuotaScope::Models(vec!["other".into()]),
+            BlockSource::Exhausted,
+            0,
+        ),
+        ("global", QuotaScope::All, BlockSource::Exhausted, 0),
+        ("credit", scoped.clone(), BlockSource::Credit, 0),
+        ("rate", scoped.clone(), BlockSource::RateLimited, 0),
+        (
+            "counted",
+            scoped.clone(),
+            BlockSource::Counted {
+                dimension: "local".into(),
+            },
+            0,
+        ),
+    ];
+    let mut cached = CredentialBlocks::default();
+    for (id, scope, source, observed) in cases {
+        let block = CredentialBlock {
+            scope: scope.clone(),
+            operation: None,
+            until_ms: now + 604_800_000,
+            source: source.clone(),
+            observed_at_ms: observed,
+        };
+        h.core
+            .store()
+            .credential_blocks()
+            .create_many(vec![credential_block::ActiveModel {
+                id: Set(id.into()),
+                credential_id: Set("q1".into()),
+                scope: Set(serde_json::to_value(scope).unwrap()),
+                operation: Set(None),
+                until_ms: Set(block.until_ms),
+                source: Set(serde_json::to_value(source).unwrap()),
+                observed_at_ms: Set(observed),
+            }])
+            .await
+            .unwrap();
+        cached.blocks.push(block);
+    }
+    h.core
+        .cache()
+        .put(
+            &keys::credential_blocks("q", "q1"),
+            serde_json::to_vec(&cached).unwrap(),
+            Duration::from_secs(3600),
+        )
+        .await
+        .unwrap();
+    let entry = |remaining| QuotaEntry {
+        id: "primary".into(),
+        source_id: "primary".into(),
+        label: None,
+        subject: QuotaSubject::Account,
+        model_scope: scoped.clone(),
+        value: QuotaValue::Window(QuotaAllowance {
+            remaining,
+            ..Default::default()
+        }),
+    };
+    // Unknown is never recovery; a channel without explicit evidence stays fail-closed.
+    for (opt_in, remaining, expected) in [
+        (true, None, 7),
+        (false, Some(100.into()), 7),
+        (true, Some(100.into()), 6),
+    ] {
+        h.channel
+            .recover_response_exhaustion
+            .store(opt_in, Ordering::SeqCst);
+        h.channel
+            .quota_snapshots
+            .lock()
+            .unwrap()
+            .push_back(QuotaSnapshot {
+                observed_at_ms: 0,
+                entries: vec![entry(remaining)],
+            });
+        h.core.query_credential_quota("q", "q1").await.unwrap();
+        let rows = blocks_for(&h, "q1").await;
+        assert_eq!(rows.len(), expected);
+        let value = h
+            .core
+            .cache()
+            .get(&keys::credential_blocks("q", "q1"))
+            .await
+            .unwrap()
+            .unwrap();
+        let copy: CredentialBlocks = serde_json::from_slice(&value.value).unwrap();
+        assert_eq!(copy.blocks.len(), expected);
+        if expected == 6 {
+            assert!(!rows.iter().any(|row| row.id == "old"));
+            assert!(rows.iter().any(|row| row.id == "new"));
+            assert!(!copy.blocks.iter().any(|b| b.scope == scoped
+                && b.source == BlockSource::Exhausted
+                && b.observed_at_ms == 0));
+        }
+    }
+}

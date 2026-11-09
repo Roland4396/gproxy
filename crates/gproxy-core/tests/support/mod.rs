@@ -160,6 +160,7 @@ pub struct TestChannel {
     pub quota_snapshots: Mutex<VecDeque<QuotaSnapshot>>,
     pub quota_errors: Mutex<VecDeque<ChannelError>>,
     pub quota_versions: Mutex<Vec<i64>>,
+    pub recover_response_exhaustion: AtomicBool,
     /// When set, the channel exposes `ChannelServices`; off by default so the
     /// "channel without services" path is the one most tests see.
     pub expose_services: AtomicBool,
@@ -321,6 +322,13 @@ impl BaseChannel for TestChannel {
 /// `{"quota":[{"id","metric":"requests"|"tokens","window_seconds":N,"limit":N,
 /// "tracking":"counted"|"reported"}]}`. Scope is always `All`.
 impl QuotaModel for TestChannel {
+    fn exhaustion_recovered(&self, scope: &QuotaScope, entries: &[QuotaEntry]) -> bool {
+        self.recover_response_exhaustion.load(Ordering::SeqCst)
+            && matches!(scope, QuotaScope::Models(ids) if ids == &["m".to_owned()])
+            && entries.iter().any(|entry| entry.model_scope == *scope
+                && matches!(&entry.value, QuotaValue::Window(a) if a.remaining.is_some_and(|n| n > rust_decimal::Decimal::ZERO)))
+    }
+
     fn dimensions(
         &self,
         _: ProviderView<'_>,

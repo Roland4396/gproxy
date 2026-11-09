@@ -4,7 +4,9 @@
 //! model draws on one allowance and every other model (Claude, GPT-OSS) on
 //! another (live probing, 2026-09-26: a Gemini request moved every Google
 //! model's reading together and nothing else; a Claude request the rest).
-//! Each family can have a 5-hour and a weekly window.
+//! Regular families can have a 5-hour and a weekly window. Argon has the
+//! independent `gemini-argon-wtu-weekly` bucket and is never charged or
+//! unblocked using the ordinary Gemini windows.
 //!
 //! The windows come from `POST {base}/v1internal:retrieveUserQuotaSummary`
 //! with the credential's `{"project": ...}` (403 `SUBSCRIPTION_REQUIRED`
@@ -49,16 +51,25 @@ const GOOGLE_PROVIDER: &str = "MODEL_PROVIDER_GOOGLE";
 enum Family {
     Google,
     ThirdParty,
+    Argon,
 }
 
 impl Family {
-    const ALL: [Self; 2] = [Self::Google, Self::ThirdParty];
+    const ALL: [Self; 3] = [Self::Google, Self::ThirdParty, Self::Argon];
+
+    fn spans(self) -> &'static [Span] {
+        match self {
+            Self::Argon => &[Span::Weekly],
+            _ => &Span::ALL,
+        }
+    }
 
     /// The `bucketId` prefix the summary uses.
     fn prefix(self) -> &'static str {
         match self {
             Self::Google => "gemini",
             Self::ThirdParty => "3p",
+            Self::Argon => "gemini-argon-wtu",
         }
     }
 
@@ -66,10 +77,14 @@ impl Family {
         match self {
             Self::Google => "Gemini models",
             Self::ThirdParty => "Claude and GPT models",
+            Self::Argon => "Gemini 4 Argon models",
         }
     }
 
     fn of(model_id: &str, model: &Value) -> Self {
+        if model_id == "gemini-4-argon" || model_id.starts_with("gemini-4-argon-") {
+            return Self::Argon;
+        }
         match model.get("modelProvider").and_then(Value::as_str) {
             Some(GOOGLE_PROVIDER) => Self::Google,
             Some(_) => Self::ThirdParty,
@@ -127,11 +142,13 @@ impl QuotaModel for Antigravity {
             .get("allow_paid_usage")
             .and_then(Value::as_bool)
             == Some(true)
-            && Family::ALL.into_iter().any(|family| {
-                Span::ALL
-                    .into_iter()
-                    .any(|span| dimension == bucket_id(family, span))
-            })
+            && [Family::Google, Family::ThirdParty]
+                .into_iter()
+                .any(|family| {
+                    Span::ALL
+                        .into_iter()
+                        .any(|span| dimension == bucket_id(family, span))
+                })
     }
 
     /// Every account may have all four windows; their models arrive with
@@ -139,7 +156,13 @@ impl QuotaModel for Antigravity {
     fn dimensions(&self, _: ProviderView<'_>, _: CredentialView<'_>) -> Vec<QuotaDimension> {
         Family::ALL
             .into_iter()
-            .flat_map(|family| Span::ALL.map(|span| (family, span)))
+            .flat_map(|family| {
+                family
+                    .spans()
+                    .iter()
+                    .copied()
+                    .map(move |span| (family, span))
+            })
             .map(|(family, span)| QuotaDimension {
                 id: bucket_id(family, span),
                 label: Some(label(family, span)),
@@ -154,6 +177,35 @@ impl QuotaModel for Antigravity {
                 blocking: true,
             })
             .collect()
+    }
+
+    fn block_applies_to(&self, dimension: &str, model: Option<&str>) -> bool {
+        let Some(model) = model else {
+            return true;
+        };
+        let argon = model == "gemini-4-argon" || model.starts_with("gemini-4-argon-");
+        match dimension {
+            "gemini-5h" | "gemini-weekly" => !argon,
+            "gemini-argon-wtu-weekly" => argon,
+            _ => true,
+        }
+    }
+
+    fn exhaustion_recovered(&self, scope: &QuotaScope, entries: &[QuotaEntry]) -> bool {
+        let QuotaScope::Models(models) = scope else {
+            return false;
+        };
+        !models.is_empty()
+            && models.iter().all(|model| {
+                let family = Family::of(model, &Value::Null);
+                let primary = bucket_id(family, Span::Weekly);
+                let relevant: Vec<_> = entries.iter().filter(|entry| {
+                family.spans().iter().any(|span| entry.source_id == bucket_id(family, *span))
+                    && matches!(&entry.model_scope, QuotaScope::Models(ids) if ids.contains(model))
+            }).collect();
+                relevant.iter().any(|entry| entry.source_id == primary)
+                    && relevant.iter().all(|entry| positive_window(entry))
+            })
     }
 
     /// A window covers exactly the models its reading listed.
@@ -175,9 +227,39 @@ impl QuotaModel for Antigravity {
             return Some(dimension);
         }
         let mut dimension = dimension.into_owned();
-        dimension.scope = entry.model_scope.clone();
+        dimension.scope = match (&entry.model_scope, dimension.id.as_str()) {
+            // Old persisted Gemini observations may still list Argon. Keep
+            // them out of Argon's reset ordering as well as its block checks.
+            (QuotaScope::Models(ids), "gemini-5h" | "gemini-weekly") => QuotaScope::Models(
+                ids.iter()
+                    .filter(|id| Family::of(id, &Value::Null) != Family::Argon)
+                    .cloned()
+                    .collect(),
+            ),
+            (scope, _) => scope.clone(),
+        };
         Some(Cow::Owned(dimension))
     }
+}
+
+/// A fresh, usable allowance, never a display-only disabled/unknown window.
+fn positive_window(entry: &QuotaEntry) -> bool {
+    if entry.label.as_deref() == Some("antigravity_disabled") {
+        return false;
+    }
+    let crate::channel::QuotaValue::Window(a) = &entry.value else {
+        return false;
+    };
+    a.period_end_ms
+        .is_some_and(|end| end > code_assist::unix_now_ms())
+        && a.remaining.is_none_or(|left| left > Decimal::ZERO)
+        && a.used_percent
+            .is_none_or(|used| used < Decimal::ONE_HUNDRED)
+        && (a.unlimited == Some(true)
+            || a.remaining.is_some_and(|left| left > Decimal::ZERO)
+            || a.used_percent
+                .is_some_and(|used| used < Decimal::ONE_HUNDRED)
+            || matches!((a.used, a.limit), (Some(used), Some(limit)) if used < limit))
 }
 
 /// A `quotaInfo` reading: percent used, and the reset in milliseconds.
@@ -187,7 +269,7 @@ type Reading = (Option<Decimal>, i64);
 /// Members move together, so any one reads for the family; the most used
 /// is taken in case a reading lands between two members' updates.
 struct Catalogue {
-    members: [(Family, Vec<String>, Option<Reading>); 2],
+    members: [(Family, Vec<String>, Option<Reading>); 3],
 }
 
 impl Catalogue {
@@ -195,23 +277,38 @@ impl Catalogue {
         let catalogue = models::quota_info(body)?;
         let mut members = Family::ALL.map(|family| (family, Vec::new(), None));
         for (model_id, model) in &catalogue {
+            let id = code_assist::model_id(model_id).to_owned();
+            let family = Family::of(&id, model);
+            // Dedicated Argon buckets remain scoped even when the catalogue
+            // omits per-model quotaInfo. Disabled placeholders grant nothing.
+            if family == Family::Argon {
+                if model.get("disabled").and_then(Value::as_bool) == Some(true) {
+                    continue;
+                }
+                members
+                    .iter_mut()
+                    .find(|(f, ..)| *f == family)
+                    .unwrap()
+                    .1
+                    .push(id.clone());
+            }
             let Some(quota) = model.get("quotaInfo").filter(|value| value.is_object()) else {
                 continue;
             };
             let Some(reset) = code_assist::text(quota, "resetTime").and_then(iso_to_ms) else {
                 continue;
             };
-            let id = code_assist::model_id(model_id).to_owned();
             let used = quota
                 .get("remainingFraction")
                 .and_then(Value::as_f64)
                 .and_then(used_percent);
-            let family = Family::of(&id, model);
             let (_, ids, reading) = members
                 .iter_mut()
                 .find(|(candidate, ..)| *candidate == family)
                 .expect("every family is listed");
-            ids.push(id);
+            if family != Family::Argon {
+                ids.push(id);
+            }
             if reading.is_none_or(|(most, _): Reading| used > most) {
                 *reading = Some((used, reset));
             }
@@ -238,11 +335,12 @@ impl Catalogue {
             .iter()
             .filter_map(|(family, ids, reading)| {
                 let (used, reset) = (*reading)?;
-                let span = if reset - now_ms > (FIVE_HOURS + 10 * 60) * 1000 {
-                    Span::Weekly
-                } else {
-                    Span::FiveHours
-                };
+                let span =
+                    if *family == Family::Argon || reset - now_ms > (FIVE_HOURS + 10 * 60) * 1000 {
+                        Span::Weekly
+                    } else {
+                        Span::FiveHours
+                    };
                 Some(code_assist::quota::window(
                     bucket_id(*family, span),
                     Some(label(*family, span)),
@@ -277,7 +375,13 @@ pub(super) fn summary_entries(body: &[u8], catalogue: Option<&[u8]>) -> Vec<Quot
         };
         let Some((family, span)) = Family::ALL
             .into_iter()
-            .flat_map(|family| Span::ALL.map(|span| (family, span)))
+            .flat_map(|family| {
+                family
+                    .spans()
+                    .iter()
+                    .copied()
+                    .map(move |span| (family, span))
+            })
             .find(|(family, span)| bucket_id(*family, *span) == id)
         else {
             continue;

@@ -1158,6 +1158,12 @@ async fn the_summary_reports_each_familys_windows() {
                     seconds: 7 * 24 * 60 * 60
                 }
             ),
+            (
+                "gemini-argon-wtu-weekly",
+                QuotaWindow::Rolling {
+                    seconds: 7 * 24 * 60 * 60
+                }
+            ),
         ]
     );
 
@@ -1489,4 +1495,92 @@ async fn a_definitive_refusal_becomes_refresh_rejected() {
         matches!(&error, ChannelError::RefreshRejected(code) if code == "invalid_grant"),
         "{error}"
     );
+}
+
+#[tokio::test]
+async fn argon_has_an_independent_weekly_bucket_even_without_model_quota_info() {
+    let catalogue = json!({"models":{
+        "gemini-3.8-flash-high":{"modelProvider":"MODEL_PROVIDER_GOOGLE","quotaInfo":{"remainingFraction":0.9,"resetTime":"2999-01-01T00:00:00Z"}},
+        "gemini-4-argon-low":{"modelProvider":"MODEL_PROVIDER_GOOGLE"},
+        "gemini-4-argon-high":{"modelProvider":"MODEL_PROVIDER_GOOGLE"},
+        "gemini-4-argon-disabled":{"disabled":true}
+    }});
+    let summary = json!({"groups":[{"buckets":[
+        {"bucketId":"gemini-weekly","remainingFraction":1,"resetTime":"2999-01-01T00:00:00Z"},
+        {"bucketId":"gemini-argon-wtu-weekly","remainingFraction":0.25,"resetTime":"2999-01-02T00:00:00Z"}
+    ]}]});
+    let (entries, _) = quota_run(catalogue, Some(summary)).await;
+    let google = entries.iter().find(|e| e.id == "gemini-weekly").unwrap();
+    let argon = entries
+        .iter()
+        .find(|e| e.id == "gemini-argon-wtu-weekly")
+        .unwrap();
+    assert!(!google.model_scope.matches("gemini-4-argon-high"));
+    assert!(argon.model_scope.matches("gemini-4-argon-high"));
+    assert!(!argon.model_scope.matches("gemini-3.8-flash-high"));
+    assert!(!argon.model_scope.matches("gemini-4-argon-disabled"));
+    assert_eq!(
+        reading(&entries, "gemini-argon-wtu-weekly"),
+        (Some(75.into()), Some(32472230400000))
+    );
+    let model = Antigravity.quota_model().unwrap();
+    let config = json!({});
+    let s = secret();
+    let declared = model.dimensions(provider(&config, None), credential(&s, &Value::Null));
+    support::assert_quota_contract(Some(model), &declared, &entries, &[]);
+    let mut legacy = google.clone();
+    legacy.model_scope = QuotaScope::Models(vec![
+        "gemini-3.8-flash-high".into(),
+        "gemini-4-argon-high".into(),
+    ]);
+    let classified = model.classify(&declared, &legacy).unwrap();
+    assert!(!classified.scope.matches("gemini-4-argon-high"));
+    assert!(!model.block_applies_to("gemini-weekly", Some("gemini-4-argon-high")));
+    assert!(!model.block_applies_to("gemini-argon-wtu-weekly", Some("gemini-3.8-flash-high")));
+}
+
+#[tokio::test]
+async fn argon_recovery_requires_its_own_positive_known_enabled_window() {
+    let catalogue =
+        json!({"models":{"gemini-4-argon-high":{"modelProvider":"MODEL_PROVIDER_GOOGLE"}}});
+    let summary = |left: Value, disabled: bool| {
+        json!({"groups":[{"buckets":[
+            {"bucketId":"gemini-weekly","remainingFraction":1,"resetTime":"2999-01-01T00:00:00Z"},
+            {"bucketId":"gemini-argon-wtu-weekly","remainingFraction":left,"disabled":disabled,"resetTime":"2999-01-01T00:00:00Z"}
+        ]}]})
+    };
+    let scope = QuotaScope::Models(vec!["gemini-4-argon-high".into()]);
+    let model = Antigravity.quota_model().unwrap();
+    for (left, disabled, recovers) in [
+        (json!(1), false, true),
+        (json!(0), false, false),
+        (Value::Null, false, false),
+        (json!(1), true, false),
+    ] {
+        let (entries, _) = quota_run(catalogue.clone(), Some(summary(left, disabled))).await;
+        assert_eq!(model.exhaustion_recovered(&scope, &entries), recovers);
+        assert!(!model.exhaustion_recovered(&QuotaScope::All, &entries));
+        assert!(!model.exhaustion_recovered(
+            &QuotaScope::Models(vec!["gemini-4-argon-high".into(), "unknown".into()]),
+            &entries
+        ));
+        let regular_only: Vec<_> = entries
+            .into_iter()
+            .filter(|e| e.id != "gemini-argon-wtu-weekly")
+            .collect();
+        assert!(!model.exhaustion_recovered(&scope, &regular_only));
+    }
+}
+
+#[tokio::test]
+async fn an_expiring_argon_catalogue_window_is_not_relabelled_as_five_hours() {
+    let entries=quota_snapshot(json!({"models":{"gemini-4-argon-high":{
+        "modelProvider":"MODEL_PROVIDER_GOOGLE","quotaInfo":{"remainingFraction":0.5,"resetTime":"2020-01-01T00:00:00Z"}
+    }}})).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, "gemini-argon-wtu-weekly");
+    assert!(!Antigravity.quota_model().unwrap().exhaustion_recovered(
+        &QuotaScope::Models(vec!["gemini-4-argon-high".into()]),
+        &entries
+    ));
 }
