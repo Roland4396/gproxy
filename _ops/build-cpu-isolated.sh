@@ -8,6 +8,7 @@ BUILD=${GPROXY_BUILD_ROOT:?Set a dedicated user-owned build directory}
 mkdir -p "$BUILD"/{tools,downloads,logs,artifact}
 export CARGO_HOME="$BUILD/tools/cargo" RUSTUP_HOME="$BUILD/tools/rustup"
 export CARGO_TARGET_DIR="$BUILD/target" CARGO_BUILD_JOBS=16
+export CARGO_HTTP_PROXY=http://127.0.0.1:17890
 export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 export CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
 export CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void
