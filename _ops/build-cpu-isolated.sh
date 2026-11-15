@@ -64,10 +64,17 @@ fi
 # upgrade host system packages. apt-get download verifies repository hashes.
 if ! ldconfig -p 2>/dev/null | grep -q 'libclang\.so'; then
   mkdir -p "$BUILD/tools/clang-debs" "$BUILD/tools/clang-root"
-  (cd "$BUILD/tools/clang-debs" && apt-get download libclang1-14 libllvm14 libclang-common-14-dev)
-  for f in "$BUILD/tools/clang-debs/"*.deb; do dpkg-deb -x "$f" "$BUILD/tools/clang-root"; done
-  export LIBCLANG_PATH="$BUILD/tools/clang-root/usr/lib/llvm-14/lib"
+  # The selected build host is Ubuntu 24.04, whose default LLVM is 18.
+  # Resolve from its signed APT catalog; never assume the older LLVM 14 exists.
+  if [ ! -e "$BUILD/tools/clang-root/usr/lib/llvm-18/lib/libclang.so" ]; then
+    (cd "$BUILD/tools/clang-debs" && apt-get download libclang1-18 libllvm18 libclang-18-dev libclang-common-18-dev cmake cmake-data libjsoncpp25 librhash0)
+    for f in "$BUILD/tools/clang-debs/"*.deb; do dpkg-deb -x "$f" "$BUILD/tools/clang-root"; done
+  fi
+  export LIBCLANG_PATH="$BUILD/tools/clang-root/usr/lib/llvm-18/lib"
   export LD_LIBRARY_PATH="$BUILD/tools/clang-root/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+  export PATH="$BUILD/tools/clang-root/usr/bin:$PATH"
+  ldd "$LIBCLANG_PATH/libclang.so" > "$BUILD/logs/libclang-ldd.log"
+  if grep -q 'not found' "$BUILD/logs/libclang-ldd.log"; then cat "$BUILD/logs/libclang-ldd.log"; exit 1; fi
 fi
 cd "$ROOT"
 { rustc --version; cargo --version; node --version; pnpm --version; go version; } | tee "$BUILD/logs/toolchain.log"
