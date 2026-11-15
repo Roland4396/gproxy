@@ -25,13 +25,28 @@ if [ ! -x "$CARGO_HOME/bin/rustc" ]; then
   fetch "$base/rustup-init.sha256" "$BUILD/downloads/rustup-init.sha256"
   (cd "$BUILD/downloads" && sha256sum -c rustup-init.sha256)
   chmod 700 "$BUILD/downloads/rustup-init"
-  HTTPS_PROXY=http://127.0.0.1:17890 HTTP_PROXY=http://127.0.0.1:17890 "$BUILD/downloads/rustup-init" -y --no-modify-path --profile minimal --default-toolchain 1.99.0
+  HTTPS_PROXY=http://127.0.0.1:17890 HTTP_PROXY=http://127.0.0.1:17890 "$BUILD/downloads/rustup-init" -y --no-modify-path --profile minimal --default-toolchain none
 fi
 export PATH="$CARGO_HOME/bin:$BUILD/tools/go/bin:$BUILD/tools/node/bin:$BUILD/tools/pnpm/node_modules/.bin:/usr/bin:/bin"
+# rustc is a rustup shim: its existence does not prove a toolchain finished
+# installing. Explicit selection also makes interrupted bootstrap resumable.
+export RUSTUP_TOOLCHAIN=1.99.0
+HTTPS_PROXY=http://127.0.0.1:17890 HTTP_PROXY=http://127.0.0.1:17890 rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt
 if [ ! -x "$BUILD/tools/go/bin/go" ]; then
-  fetch https://go.dev/dl/go1.27.1.linux-amd64.tar.gz "$BUILD/downloads/go.tar.gz"
-  fetch https://go.dev/dl/go1.27.1.linux-amd64.tar.gz.sha256 "$BUILD/downloads/go.sha256"
-  echo "$(cat "$BUILD/downloads/go.sha256")  $BUILD/downloads/go.tar.gz" | sha256sum -c -
+  # Go publishes archive checksums in its JSON index, not .tar.gz.sha256.
+  fetch 'https://go.dev/dl/?mode=json&include=all' "$BUILD/downloads/go-index.json"
+  python3 - "$BUILD/downloads" <<'PY'
+import json,re,sys
+from pathlib import Path
+d=Path(sys.argv[1])
+entries=[f for release in json.loads((d/'go-index.json').read_text()) for f in release['files'] if f['filename']=='go1.27.1.linux-amd64.tar.gz']
+assert len(entries)==1 and re.fullmatch(r'[0-9a-f]{64}',entries[0]['sha256'])
+(d/'go.sha256').write_text(entries[0]['sha256']+'  go.tar.gz\n')
+PY
+  if ! (cd "$BUILD/downloads" && sha256sum -c go.sha256); then
+    fetch https://go.dev/dl/go1.27.1.linux-amd64.tar.gz "$BUILD/downloads/go.tar.gz"
+    (cd "$BUILD/downloads" && sha256sum -c go.sha256)
+  fi
   tar -xzf "$BUILD/downloads/go.tar.gz" -C "$BUILD/tools"
 fi
 if [ ! -x "$BUILD/tools/node/bin/node" ]; then
@@ -54,11 +69,10 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libclang\.so'; then
   export LIBCLANG_PATH="$BUILD/tools/clang-root/usr/lib/llvm-14/lib"
   export LD_LIBRARY_PATH="$BUILD/tools/clang-root/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
 fi
-HTTPS_PROXY=http://127.0.0.1:17890 HTTP_PROXY=http://127.0.0.1:17890 rustup component add rustfmt
 cd "$ROOT"
 { rustc --version; cargo --version; node --version; pnpm --version; go version; } | tee "$BUILD/logs/toolchain.log"
 cargo fmt --all --check > "$BUILD/logs/fmt.log" 2>&1
-(cd console && pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build) > "$BUILD/logs/console.log" 2>&1
+(cd console && pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build && pnpm i18n:check) > "$BUILD/logs/console.log" 2>&1
 python3 -m unittest discover -s _ops/tests -v > "$BUILD/logs/python.log" 2>&1
 cargo test --locked -p gproxy-core --lib no_idle_deadline_tests > "$BUILD/logs/idle-clock.log" 2>&1
 cargo test --locked -p gproxy-core --test limits > "$BUILD/logs/limits.log" 2>&1
