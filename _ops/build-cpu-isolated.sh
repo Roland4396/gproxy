@@ -50,6 +50,18 @@ PY
   fi
   tar -xzf "$BUILD/downloads/go.tar.gz" -C "$BUILD/tools"
 fi
+# BoringSSL's code generator uses Go modules. Its confirmed direct connection to
+# proxy.golang.org timed out, so scope the existing download proxy to Go only;
+# never leak proxy settings into the Rust loopback integration-test processes.
+export GOMODCACHE="$BUILD/go-modcache" GOCACHE="$BUILD/go-cache"
+export GPROXY_REAL_GO="$BUILD/tools/go/bin/go"
+mkdir -p "$BUILD/tools/go-wrapper"
+cat > "$BUILD/tools/go-wrapper/go" <<'GO'
+#!/bin/sh
+exec env HTTP_PROXY=http://127.0.0.1:17890 HTTPS_PROXY=http://127.0.0.1:17890 http_proxy=http://127.0.0.1:17890 https_proxy=http://127.0.0.1:17890 NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 "$GPROXY_REAL_GO" "$@"
+GO
+chmod 700 "$BUILD/tools/go-wrapper/go"
+export PATH="$BUILD/tools/go-wrapper:$PATH"
 if [ ! -x "$BUILD/tools/node/bin/node" ]; then
   base=https://nodejs.org/dist/v24.21.0
   fetch "$base/node-v24.21.0-linux-x64.tar.xz" "$BUILD/downloads/node-v24.21.0-linux-x64.tar.xz"
