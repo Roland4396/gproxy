@@ -79,6 +79,9 @@ pub(crate) async fn timeout<F: Future>(
     duration: std::time::Duration,
     future: F,
 ) -> Option<F::Output> {
+    if duration == std::time::Duration::MAX {
+        return Some(future.await);
+    }
     tokio::time::timeout(duration, future).await.ok()
 }
 
@@ -87,6 +90,9 @@ pub(crate) async fn timeout<F: Future>(
     duration: std::time::Duration,
     future: F,
 ) -> Option<F::Output> {
+    if duration == std::time::Duration::MAX {
+        return Some(future.await);
+    }
     use futures_util::future::{Either, select};
     let timer = std::pin::pin!(gloo_timers::future::TimeoutFuture::new(
         u32::try_from(duration.as_millis()).unwrap_or(u32::MAX)

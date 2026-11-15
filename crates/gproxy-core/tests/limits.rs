@@ -105,3 +105,23 @@ fn zero_or_negative_limits_are_rejected() {
         Err(LimitsError::NotPositive("request_timeout_ms"))
     );
 }
+
+#[test]
+fn zero_idle_disables_only_the_idle_clock() {
+    let mut row = settings();
+    row.stream_idle_timeout_ms = 0;
+    let limits = ExecutionLimits::from_settings(&row).unwrap();
+    assert_eq!(limits.stream_idle_timeout, Duration::MAX);
+    assert_eq!(limits.request_timeout, Duration::from_secs(1200));
+    assert_eq!(limits.capability(None).stream_idle, Duration::MAX);
+    assert_eq!(
+        limits
+            .capability(Some(Duration::from_secs(2)))
+            .operation_total,
+        Duration::from_secs(2)
+    );
+    assert_eq!(
+        limits.max_response_body_bytes,
+        ExecutionLimits::default().max_response_body_bytes
+    );
+}

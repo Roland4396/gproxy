@@ -300,7 +300,7 @@
     "alwaysSecureCookie": "Всегда добавлять Secure к cookie сеанса",
     "maxAttempts": "Максимум попыток",
     "requestTimeoutMs": "Тайм-аут запроса (мс)",
-    "streamIdleTimeoutMs": "Тайм-аут простоя потока (мс)",
+    "streamIdleTimeoutMs": "Тайм-аут простоя потока (мс, 0 — отключён)",
     "maxRequestBodyBytes": "Максимальный размер тела запроса (байты)",
     "maxUploadBodyBytes": "Максимальный размер загружаемого тела (байты)",
     "maxResponseBodyBytes": "Максимальный размер тела ответа (байты)",

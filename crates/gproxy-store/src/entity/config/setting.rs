@@ -67,6 +67,7 @@ pub struct Model {
     pub request_timeout_ms: u32,
     /// Maximum silence between stream progress events.
     #[sea_orm(default_value = 300000)]
+    /// Zero disables the stream-idle clock; request_timeout_ms stays independent.
     pub stream_idle_timeout_ms: u32,
     /// Every data-plane request body except a file upload, and the size a
     /// compressed request body may inflate to.

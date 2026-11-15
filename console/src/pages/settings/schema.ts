@@ -43,7 +43,7 @@ export const groups = [
     fields: [
       instance("maxAttempts", "number", { min: 1 }),
       instance("requestTimeoutMs", "number", { min: 1 }),
-      instance("streamIdleTimeoutMs", "number", { min: 1 }),
+      instance("streamIdleTimeoutMs", "number", { min: 0 }),
       instance("maxRequestBodyBytes", "number", { min: 1 }),
       instance("maxUploadBodyBytes", "number", { min: 1 }),
       instance("maxResponseBodyBytes", "number", { min: 1 }),

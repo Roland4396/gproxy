@@ -129,7 +129,8 @@ impl<C: BatchConnectionTrait + Send + Sync + 'static> SettingsManage<'_, C> {
                 row.request_timeout_ms = Set(positive(value, "requestTimeoutMs")?);
             }
             if let Some(value) = instance.stream_idle_timeout_ms {
-                row.stream_idle_timeout_ms = Set(positive(value, "streamIdleTimeoutMs")?);
+                // Zero explicitly disables the stream-idle clock, not the request wait.
+                row.stream_idle_timeout_ms = Set(value);
             }
             if let Some(value) = instance.max_request_body_bytes {
                 row.max_request_body_bytes = Set(positive64(value, "maxRequestBodyBytes")?);

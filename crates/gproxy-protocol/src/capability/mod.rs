@@ -29,14 +29,14 @@ pub type CapabilityFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 /// The limits a capability instance is required to enforce.
 ///
-/// There is no implicit unlimited configuration. Hosts must return the limits
-/// bound to this particular instance and continue enforcing stream idle and
-/// byte limits after an operation has returned a streaming body.
+/// Hosts return the limits bound to this instance. An explicit disabled idle
+/// clock does not disable byte bounds or cancellation after streaming starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilityLimits {
     /// Total wall-clock time allowed for one operation, including body transfer.
     pub operation_total: Duration,
-    /// Maximum idle interval between stream progress events.
+    /// Maximum idle interval; `Duration::MAX` explicitly disables the clock.
+    /// Hosts must not create a huge timer for this sentinel.
     pub stream_idle: Duration,
     /// Maximum bytes accepted by a read or an upstream response body.
     pub read_bytes: u64,
