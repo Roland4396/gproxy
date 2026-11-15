@@ -54,6 +54,7 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libclang\.so'; then
   export LIBCLANG_PATH="$BUILD/tools/clang-root/usr/lib/llvm-14/lib"
   export LD_LIBRARY_PATH="$BUILD/tools/clang-root/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
 fi
+HTTPS_PROXY=http://127.0.0.1:17890 HTTP_PROXY=http://127.0.0.1:17890 rustup component add rustfmt
 cd "$ROOT"
 { rustc --version; cargo --version; node --version; pnpm --version; go version; } | tee "$BUILD/logs/toolchain.log"
 cargo fmt --all --check > "$BUILD/logs/fmt.log" 2>&1
