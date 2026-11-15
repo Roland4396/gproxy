@@ -1,5 +1,5 @@
-//! Execution limits taken from the Setting row. Core has no unlimited mode:
-//! every capability instance and codec receives finite values derived here.
+//! Execution limits taken from the Setting row. A zero stream-idle setting
+//! disables only the idle clock; request and byte limits remain enforced.
 
 use gproxy_protocol::{Operation, capability::CapabilityLimits, codec::CodecLimits};
 use gproxy_store::entity::config::setting;
@@ -11,7 +11,7 @@ pub enum LimitsError {
     NotPositive(&'static str),
 }
 
-/// Finite bounds for one configuration snapshot. `Default` mirrors the Setting
+/// Bounds for one configuration snapshot. `Default` mirrors the Setting
 /// column defaults so an uninitialized database behaves like a fresh row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExecutionLimits {
@@ -20,7 +20,8 @@ pub struct ExecutionLimits {
     /// the body; nothing bounds a whole stream, which may run for as long as
     /// it keeps producing.
     pub request_timeout: Duration,
-    /// Maximum silence between stream progress events.
+    /// Maximum silence between stream progress events. `Duration::MAX` means
+    /// disabled: runtime helpers await directly without creating any timer.
     pub stream_idle_timeout: Duration,
     pub max_request_body_bytes: u64,
     /// [`Operation::CreateFile`]'s request body, in place of
@@ -65,9 +66,11 @@ impl ExecutionLimits {
             request_timeout: Duration::from_millis(
                 positive_u32(settings.request_timeout_ms, "request_timeout_ms")?.into(),
             ),
-            stream_idle_timeout: Duration::from_millis(
-                positive_u32(settings.stream_idle_timeout_ms, "stream_idle_timeout_ms")?.into(),
-            ),
+            stream_idle_timeout: if settings.stream_idle_timeout_ms == 0 {
+                Duration::MAX
+            } else {
+                Duration::from_millis(settings.stream_idle_timeout_ms.into())
+            },
             max_request_body_bytes: positive_u64(
                 settings.max_request_body_bytes,
                 "max_request_body_bytes",

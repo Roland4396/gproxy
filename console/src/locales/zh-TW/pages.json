@@ -300,7 +300,7 @@
     "alwaysSecureCookie": "工作階段 cookie 一律帶 Secure",
     "maxAttempts": "最多嘗試次數",
     "requestTimeoutMs": "請求超時（毫秒）",
-    "streamIdleTimeoutMs": "流空闲超時（毫秒）",
+    "streamIdleTimeoutMs": "流空閒超時（毫秒，0 表示關閉）",
     "maxRequestBodyBytes": "請求體上限（字节）",
     "maxUploadBodyBytes": "檔案上傳請求體上限（位元組）",
     "maxResponseBodyBytes": "回應體上限（字节）",

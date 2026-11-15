@@ -130,7 +130,7 @@ async fn run<C: BatchConnectionTrait + Send + Sync + 'static>(
                 lanes.remove(&lane);
                 owners.retain(|_, found| { found.retain(|owner| owner != &lane); !found.is_empty() });
             }
-            _ = crate::rt::timeout(idle.saturating_sub(activity.elapsed()), std::future::pending::<()>()), if tasks.is_empty() => break,
+            _ = crate::rt::timeout(idle.saturating_sub(activity.elapsed()), std::future::pending::<()>()), if tasks.is_empty() && idle != std::time::Duration::MAX => break,
             event = receive.recv() => {
                 if let Some(event) = event {
                     if matches!(event, Event::Frame { .. }) { activity = web_time::Instant::now(); }

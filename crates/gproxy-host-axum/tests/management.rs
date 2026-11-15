@@ -625,3 +625,31 @@ fn user_write() -> UserWrite {
         ..UserWrite::default()
     }
 }
+
+#[tokio::test]
+async fn stream_idle_can_be_disabled_without_changing_response_wait() {
+    let host = instance().await;
+    let mut patch = post(
+        "/admin/api/settings",
+        json!({"instance":{"streamIdleTimeoutMs":0}}),
+    );
+    *patch.method_mut() = Method::PATCH;
+    let reply = host.send(keyed(patch, "k-root")).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["instance"]["streamIdleTimeoutMs"], 0);
+    assert_eq!(reply.json()["instance"]["requestTimeoutMs"], 1_200_000);
+    host.publish().await;
+    assert_eq!(
+        host.app
+            .gproxy()
+            .core()
+            .snapshot()
+            .limits
+            .stream_idle_timeout,
+        std::time::Duration::MAX
+    );
+    assert_eq!(
+        host.app.gproxy().core().snapshot().limits.request_timeout,
+        std::time::Duration::from_secs(1200)
+    );
+}

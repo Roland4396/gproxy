@@ -300,7 +300,7 @@
     "alwaysSecureCookie": "Always mark the session cookie Secure",
     "maxAttempts": "Maximum attempts",
     "requestTimeoutMs": "Request timeout (ms)",
-    "streamIdleTimeoutMs": "Stream idle timeout (ms)",
+    "streamIdleTimeoutMs": "Stream idle timeout (ms, 0 disables)",
     "maxRequestBodyBytes": "Maximum request body (bytes)",
     "maxUploadBodyBytes": "Maximum file upload body (bytes)",
     "maxResponseBodyBytes": "Maximum response body (bytes)",

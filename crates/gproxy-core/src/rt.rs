@@ -7,11 +7,17 @@ use std::{future::Future, time::Duration};
 /// Resolves to None when `duration` elapses first.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn timeout<F: Future>(duration: Duration, future: F) -> Option<F::Output> {
+    if duration == std::time::Duration::MAX {
+        return Some(future.await);
+    }
     tokio::time::timeout(duration, future).await.ok()
 }
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn timeout<F: Future>(duration: Duration, future: F) -> Option<F::Output> {
+    if duration == std::time::Duration::MAX {
+        return Some(future.await);
+    }
     use futures_util::future::{Either, select};
     let future = std::pin::pin!(future);
     let timer = std::pin::pin!(sleep(duration));
@@ -56,4 +62,46 @@ where
 {
     wasm_bindgen_futures::spawn_local(future);
     true
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod no_idle_deadline_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn disabled_clock_has_no_timer_and_survives_large_time_advance() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let waiter = tokio::spawn(timeout(Duration::MAX, receiver));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60 * 60 * 24 * 365 * 100)).await;
+        assert!(!waiter.is_finished());
+        sender.send(7).unwrap();
+        assert_eq!(waiter.await.unwrap(), Some(Ok(7)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn finite_request_wait_remains_enforced() {
+        let waiter = tokio::spawn(timeout(
+            Duration::from_secs(1200),
+            std::future::pending::<()>(),
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(1201)).await;
+        assert_eq!(waiter.await.unwrap(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_still_interrupts_disabled_idle_wait() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let child = cancel.clone();
+        let waiter = tokio::spawn(async move {
+            tokio::select! {
+                () = child.cancelled() => true,
+                _ = timeout(Duration::MAX, std::future::pending::<()>()) => false,
+            }
+        });
+        tokio::task::yield_now().await;
+        cancel.cancel();
+        assert!(waiter.await.unwrap());
+    }
 }

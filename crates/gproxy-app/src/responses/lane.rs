@@ -145,13 +145,17 @@ pub(super) async fn run<C: BatchConnectionTrait + Send + Sync + 'static>(
         .limits
         .stream_idle_timeout;
     loop {
-        let deadline = runner
-            .chains
-            .iter()
-            .filter(|(id, _)| !runner.active(id))
-            .map(|(_, chain)| chain.last_used + idle)
-            .min()
-            .or_else(|| runner.chains.is_empty().then_some(runner.activity + idle));
+        let deadline = if idle == std::time::Duration::MAX {
+            None
+        } else {
+            runner
+                .chains
+                .iter()
+                .filter(|(id, _)| !runner.active(id))
+                .map(|(_, chain)| chain.last_used + idle)
+                .min()
+                .or_else(|| runner.chains.is_empty().then_some(runner.activity + idle))
+        };
         tokio::select! {
             () = runner.context.cancellation.cancelled() => break,
             frame = runner.incoming.next(), if !runner.incoming.is_empty() => {
