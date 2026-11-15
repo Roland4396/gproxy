@@ -83,6 +83,12 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libclang\.so'; then
     (cd "$BUILD/tools/clang-debs" && apt-get download libclang1-18 libllvm18 libclang-18-dev libclang-common-18-dev cmake cmake-data libjsoncpp25 librhash0)
     for f in "$BUILD/tools/clang-debs/"*.deb; do dpkg-deb -x "$f" "$BUILD/tools/clang-root"; done
   fi
+  if [ ! -x "$BUILD/tools/clang-root/usr/bin/clang-18" ]; then
+    (cd "$BUILD/tools/clang-debs" && apt-get download clang-18 libclang-cpp18)
+    for f in "$BUILD/tools/clang-debs/clang-18_"*.deb "$BUILD/tools/clang-debs/libclang-cpp18_"*.deb; do dpkg-deb -x "$f" "$BUILD/tools/clang-root"; done
+    ln -sfn clang-18 "$BUILD/tools/clang-root/usr/bin/clang"
+    ln -sfn clang++-18 "$BUILD/tools/clang-root/usr/bin/clang++"
+  fi
   export LIBCLANG_PATH="$BUILD/tools/clang-root/usr/lib/llvm-18/lib"
   export LD_LIBRARY_PATH="$BUILD/tools/clang-root/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
   export PATH="$BUILD/tools/clang-root/usr/bin:$PATH"
@@ -90,7 +96,7 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libclang\.so'; then
   if grep -q 'not found' "$BUILD/logs/libclang-ldd.log"; then cat "$BUILD/logs/libclang-ldd.log"; exit 1; fi
 fi
 cd "$ROOT"
-{ rustc --version; cargo --version; node --version; pnpm --version; go version; } | tee "$BUILD/logs/toolchain.log"
+{ rustc --version; cargo --version; node --version; pnpm --version; go version; clang --version; cmake --version; } | tee "$BUILD/logs/toolchain.log"
 cargo fmt --all --check > "$BUILD/logs/fmt.log" 2>&1
 (cd console && pnpm install --frozen-lockfile && pnpm lint && pnpm test && pnpm build && pnpm i18n:check) > "$BUILD/logs/console.log" 2>&1
 python3 -m unittest discover -s _ops/tests -v > "$BUILD/logs/python.log" 2>&1
